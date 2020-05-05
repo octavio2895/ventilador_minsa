@@ -13,7 +13,7 @@
 #define PIN_PWM PA3
 #define PIN_LIMIT_SWITCH PA8
 #define PIN_INVERT PA1
-
+//222
 // Physical constraints.
 #define ROTARYMIN 0
 #define ROTARYMAX 200

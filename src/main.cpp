@@ -53,7 +53,7 @@ enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
 // };
 
 // Global vars.
-double motor_position, motor_output, motor_target, kp = 5, ki = 0/*.0005*/, kd = 0.015;
+double motor_position, motor_output, motor_target, kp = 5, ki = 0/*.0005*/, kd = 0;
 bool cal_flag = false, enc_inverted = false, dir;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_dir_change, next_screen_update, next_kp_update;
@@ -132,7 +132,8 @@ void setup()
   digitalWrite(PIN_DIR_B, HIGH);
 
   myservo.attach(PIN_PWM, 1000, 2000);
-  myservo.writeMicroseconds(1500);
+  myservo.writeMicroseconds(2000);
+  delay(1000);
   // currentTime = millis();
 } 
 
@@ -169,15 +170,15 @@ void loop()
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
-
+//LCD
   if (millis()>next_screen_update) 
   {
     lcd.clear();
     lcd.print("Encoder:");
     // lcd.setCursor(9,0);
     lcd.print(encoder.getPosition());
-    lcd.print("kp:");
-    lcd.print(control_kp);
+    // lcd.print("pwm");
+    // lcd.print(pwm);
     lcd.setCursor(0,1);
     lcd.print("O:");
     lcd.print(motor_output);

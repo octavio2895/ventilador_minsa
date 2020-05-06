@@ -4,6 +4,8 @@
 #include <PID_v1.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include <Servo.h>
+
 
 // Pin definitions.
 #define PIN_ENCODER_A PA7
@@ -12,14 +14,17 @@
 #define PIN_DIR_B PA5
 #define PIN_PWM PA3
 #define PIN_LIMIT_SWITCH PA8
-#define PIN_INVERT PA1
+#define PIN_INVERT PA9
+#define PIN_REGULADOR_P PA0 // UPDATE kp de 0.01 - 0.25
+#define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
+#define PIN_REGULADOR_TIEMPO PA2 //
 
 // Physical constraints.
 #define ROTARYMIN 0
 #define ROTARYMAX 200
 #define ROTARYINITIAL 0
 #define ENCODER_CPR 2000
-#define MOTOR_DZ 165
+#define MOTOR_DZ 0 //165
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY 50
@@ -32,18 +37,36 @@
 #define CAL_DRIVE_ANG 0.5
 #define CAL_DZ 0.5
 
+//Super Calibrate
+#define CAL_TICKS 5
+
+
 // Structs and Enums
 enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
 
+// struct MOTOR {
+
+//   bool DIR_A;
+//   bool DIR_B;
+//   bool is_;
+
+// };
+
 // Global vars.
-double motor_position, motor_output, motor_target, kp = 0.1, ki = .0005, kd = 0.015;
+double motor_position, motor_output, motor_target, kp = 5, ki = 0/*.0005*/, kd = 0.015;
 bool cal_flag = false, enc_inverted = false, dir;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_dir_change, next_screen_update;
+uint32_t next_motor_update = 0, next_dir_change, next_screen_update, next_kp_update;
+
+double control_kp;
+uint16_t control_tiempo, control_rango;
+
+
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PA0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
+Servo myservo;
 
 // Last known rotary position.
 // int lastPos = 0;
@@ -80,17 +103,25 @@ int16_t deg_to_clicks(double deg);
 
 void setup()
 {
+
+
   pinMode(PIN_DIR_A, OUTPUT);
   pinMode(PIN_DIR_B, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_INVERT, INPUT);
+
+  pinMode(PIN_REGULADOR_P, INPUT_ANALOG);
+  pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
+  pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
+
+
   if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PA0);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
 
   motor.SetMode(AUTOMATIC);
-  motor.SetOutputLimits(-(256-MOTOR_DZ), (256-MOTOR_DZ));
+  motor.SetOutputLimits(-500,500);
   
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
@@ -100,34 +131,39 @@ void setup()
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
+  myservo.attach(PIN_PWM, 1000, 2000);
+  myservo.writeMicroseconds(1500);
   // currentTime = millis();
 } 
 
 void loop() 
 {
-  // if(!cal_flag) calibrate();
+  
   BlinkLED();
+  //Lecturas
 
+  // if(!cal_flag) calibrate();
+  
+  
   if(millis()>next_dir_change)
   {
     if (dir)
     {
-      motor_target = 100;
+      motor_target = control_rango; //100 A -100 ES EL ANGULO 0 - 1024 MAPEAR DE 0 A 200
       dir = !dir;
     }
     else
     {
-      motor_target = -100;
+      motor_target = -control_rango;
       dir = !dir;
     }
-    next_dir_change = millis() + 10000;
+    next_dir_change = millis() + control_tiempo; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
   }
 
   if(millis()>next_motor_update)
   {
     motor_position = (double) calculate_position();
     motor.Compute();
-    motor_set_dir(motor_output);
     motor_write(motor_output);
     // analogWrite(PIN_PWM, 256);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
@@ -140,12 +176,28 @@ void loop()
     lcd.print("Encoder:");
     // lcd.setCursor(9,0);
     lcd.print(encoder.getPosition());
+    lcd.print("kp:");
+    lcd.print(control_kp);
     lcd.setCursor(0,1);
     lcd.print("O:");
     lcd.print(motor_output);
     lcd.print("T:");
     lcd.print(motor_target);
-    next_screen_update = millis() + 100;
+    
+    
+    next_screen_update = millis() + 500;
+  }
+
+  if (millis()>next_kp_update)
+  {
+    control_rango = map(analogRead(PIN_REGULADOR_RANGO),0,1024,0,50);
+    control_tiempo = map(analogRead(PIN_REGULADOR_TIEMPO),0,1024,2000,10000);
+    control_kp = ((double)map(analogRead(PIN_REGULADOR_RANGO),0,1024,100,2500))/10000;
+
+    
+    
+    //motor.SetTunings(control_kp,0,0.015);
+    next_kp_update = millis() + 1000;
   }
 
   // if (newPos < ROTARYMIN) 
@@ -278,10 +330,7 @@ void motor_set_dir(double pwm)
 
 void motor_write(double pwm)
 {
-  if(pwm  >0) pwm = pwm + MOTOR_DZ;
-  else if (pwm < 0) pwm = pwm - MOTOR_DZ;
-  analogWrite(PIN_PWM, abs(pwm));
-  return;
+  myservo.writeMicroseconds(1500+pwm);
 }
 
 double clicks_to_deg(int16_t clicks)
@@ -293,3 +342,37 @@ int16_t deg_to_clicks(double deg)
 {
   return((int16_t)((deg/360)*ENCODER_CPR));
 }
+
+
+// void super_calibrate()
+// {
+//   uint16_t prev_encoder_position;
+//   bool is_first_loop, init_on_limit;
+//   encoder.setPosition(48000);
+//   prev_encoder_position = encoder.getPosition();
+
+//   if(is_first_loop)
+//   {
+//     init_on_limit = digitalRead(PIN_LIMIT_SWITCH);
+//     is_first_loop = 0;
+//     for(int i=0;i<=CAL_TICKS;i++)
+//     {
+//       digitalWrite(PIN_DIR_A, HIGH);
+//       digitalWrite(PIN_DIR_B, LOW);
+//     }
+//       digitalWrite(PIN_DIR_A, LOW);
+//       digitalWrite(PIN_DIR_B, LOW);
+
+    
+
+
+//   }
+
+
+// }
+
+// void tick_movement()
+// {
+
+// }
+

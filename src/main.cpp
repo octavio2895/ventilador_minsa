@@ -126,7 +126,7 @@ void setup()
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
   // lcd.print(F("Encoder: "));
-  analogWrite(PIN_PWM, 255);
+  //analogWrite(PIN_PWM, 255);
   analogWriteFrequency(1000);
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);

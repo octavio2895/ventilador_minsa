@@ -14,7 +14,7 @@
 #define PIN_DIR_B PA5
 #define PIN_PWM PA3
 #define PIN_LIMIT_SWITCH PA8
-#define PIN_INVERT PA9
+#define PIN_INVERT PB10
 #define PIN_REGULADOR_P PA0 // UPDATE kp de 0.01 - 0.25
 #define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
 #define PIN_REGULADOR_TIEMPO PA2 //
@@ -27,7 +27,7 @@
 #define MOTOR_DZ 0 //165
 
 // Update rates.
-#define MOTOR_UPDATE_DELAY 50
+#define MOTOR_UPDATE_DELAY 10
 #define SCREEN_UPDATE_DELAY 100
 #define BLINK_DELAY 500
 
@@ -39,6 +39,12 @@
 
 //Super Calibrate
 #define CAL_TICKS 5
+
+//Experiment
+#define RISE_TIME 800
+#define FALL_TIME 800
+#define ACC_TIME  150
+#define DEGREES   6
 
 
 // Structs and Enums
@@ -52,20 +58,30 @@ enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
 
 // };
 
+struct ControlVals {
+  //Control encoder
+double control_kp = 0.1;
+uint16_t control_tiempo = 2000, control_rango = 75;
+
+}control_vals;
+
 // Global vars.
-double motor_position, motor_output, motor_target, kp = 5, ki = 0/*.0005*/, kd = 0;
-bool cal_flag = false, enc_inverted = false, dir;
+double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, kp = 20000, ki = 0/*.0005*/, kd = 0.05;
+bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_dir_change, next_screen_update, next_kp_update;
+float const_vel_time_rise, const_vel_time_fall;
+float theta_dot_max, print_curr_step, print_m_target;
+double acum_error;
 
-double control_kp;
-uint16_t control_tiempo, control_rango;
+
 
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PA0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
-PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
+PID motor(&motor_velocity, &motor_output, &motor_target, kp, ki, kd, DIRECT); //Input, Output, and Setpoint.  Initial tuning parameters are also set here.
+//PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
 Servo myservo;
 
 // Last known rotary position.
@@ -90,20 +106,25 @@ void encoderButtonISR() {
 // }
 
 // Prototypes
+void change_control_values(ControlVals *vals);
 void BlinkLED();
 void calibrate();
 void motor_set_dir(double);
 void motor_write(double);
 int16_t calculate_position();
+int16_t calculate_angular_velocity();
+int16_t calculate_angular_acceleration();
 void encoderISR();
 int16_t deg_to_clicks(double deg);
+double clicks_to_deg(int16_t clicks);
+
 
 
 
 
 void setup()
 {
-
+  
 
   pinMode(PIN_DIR_A, OUTPUT);
   pinMode(PIN_DIR_B, OUTPUT);
@@ -122,7 +143,6 @@ void setup()
 
   motor.SetMode(AUTOMATIC);
   motor.SetOutputLimits(-500,500);
-  
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
   // lcd.print(F("Encoder: "));
@@ -131,59 +151,138 @@ void setup()
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
+  //Serial.begin(115200);
+  //Serial.println("Booting up!");
+
+
   myservo.attach(PIN_PWM, 1000, 2000);
-  myservo.writeMicroseconds(2000);
-  delay(1000);
+  // myservo.writeMicroseconds(1400);
+  // delay(1000);
+  // myservo.writeMicroseconds(1600);
+  // delay(1000);
   // currentTime = millis();
+
+  const_vel_time_rise = RISE_TIME - 2*ACC_TIME;
+  const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
+  theta_dot_max = -DEGREES/(const_vel_time_rise+ACC_TIME);
 } 
 
 void loop() 
 {
-  
   BlinkLED();
   //Lecturas
 
   // if(!cal_flag) calibrate();
   
   
-  if(millis()>next_dir_change)
-  {
-    if (dir)
-    {
-      motor_target = control_rango; //100 A -100 ES EL ANGULO 0 - 1024 MAPEAR DE 0 A 200
-      dir = !dir;
-    }
-    else
-    {
-      motor_target = -control_rango;
-      dir = !dir;
-    }
-    next_dir_change = millis() + control_tiempo; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
-  }
+  // if(millis()>next_dir_change)
+  // {
+  //   if (dir)
+  //   {
+  //     //motor_target = vals->control_rango; //100 A -100 ES EL ANGULO 0 - 1024 MAPEAR DE 0 A 200
+  //     dir = !dir;
+  //     is_falling = 0;
+  //     is_rising = 1;
+  //     next_dir_change = millis() + RISE_TIME;
+  //   }
+  //   else
+  //   {
+  //     //motor_target = -vals->control_rango;
+  //     dir = !dir;
+  //     is_rising = 0;
+  //     is_falling = 1;
+  //     next_dir_change = millis() + FALL_TIME;
+  //   }
+  //   // next_dir_change = millis() + vals->control_tiempo; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
+  // }
 
   if(millis()>next_motor_update)
   {
     motor_position = (double) calculate_position();
+    motor_angular_position = clicks_to_deg(motor_position);
+    motor_velocity = (double) calculate_angular_velocity();
+    motor_acceleration = (double) calculate_angular_acceleration();
+    uint32_t initial_pos = 0;
+  
+    static uint32_t initial_millis = millis();
+    
+    float current_step = (millis()-initial_millis)%(RISE_TIME+FALL_TIME);
+    print_curr_step = current_step;
+    
+    //Rising
+    if(motor_position > initial_pos)
+    {
+      motor_target = 0;
+      //motor_target = - theta_dot_max;
+    }
+    else if(current_step <= ACC_TIME)
+    {
+      if(is_falling)
+      {
+        
+      }
+      is_falling = 0;
+      //is_rising = 1;
+      motor_target = (theta_dot_max/ACC_TIME)*(current_step);
+    }
+    else if (current_step > ACC_TIME && current_step <= ACC_TIME+const_vel_time_rise)
+    {
+      motor_target = theta_dot_max;
+    }
+    else if (current_step > (ACC_TIME + const_vel_time_rise) && current_step <= RISE_TIME)
+    {
+      motor_target = -(theta_dot_max/ACC_TIME)*(current_step-(ACC_TIME+const_vel_time_rise))+theta_dot_max;
+    }
+    //Falling
+    else if (motor_position > 0)
+    { 
+      motor_target = 0;
+    } 
+    
+    else if (current_step > RISE_TIME && current_step <= (RISE_TIME+ACC_TIME))
+    {
+      if(is_rising)
+      {
+        initial_pos = motor_position;
+      }
+      is_rising = 0;
+      is_falling = 1;
+      motor_target = -(theta_dot_max/ACC_TIME)*(current_step-RISE_TIME);
+    }
+    else if (current_step > (RISE_TIME + ACC_TIME) && current_step <= (RISE_TIME + ACC_TIME + const_vel_time_fall))
+    {
+      motor_target = -theta_dot_max;
+    }
+    else if (current_step > (RISE_TIME + ACC_TIME + const_vel_time_fall) && current_step <= (RISE_TIME+FALL_TIME))
+    {
+      motor_target = (theta_dot_max/ACC_TIME)*(current_step-(RISE_TIME+ACC_TIME+const_vel_time_fall))-theta_dot_max;
+    }
+    acum_error += motor_target*MOTOR_UPDATE_DELAY;
+    
+    print_m_target = motor_target*1000;
     motor.Compute();
-    motor_write(motor_output);
+    motor_write(motor_output); //PWM
     // analogWrite(PIN_PWM, 256);
+    
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
-//LCD
+  //LCD
   if (millis()>next_screen_update) 
   {
     lcd.clear();
-    lcd.print("Encoder:");
+    lcd.print("Enc:");
     // lcd.setCursor(9,0);
     lcd.print(encoder.getPosition());
+    lcd.print(" ST:");
+    lcd.print((int)print_curr_step);
     // lcd.print("pwm");
     // lcd.print(pwm);
     lcd.setCursor(0,1);
     lcd.print("O:");
     lcd.print(motor_output);
     lcd.print("T:");
-    lcd.print(motor_target);
+    lcd.print(print_m_target);
     
     
     next_screen_update = millis() + 500;
@@ -191,13 +290,7 @@ void loop()
 
   if (millis()>next_kp_update)
   {
-    control_rango = map(analogRead(PIN_REGULADOR_RANGO),0,1024,0,50);
-    control_tiempo = map(analogRead(PIN_REGULADOR_TIEMPO),0,1024,2000,10000);
-    control_kp = ((double)map(analogRead(PIN_REGULADOR_RANGO),0,1024,100,2500))/10000;
-
-    
-    
-    //motor.SetTunings(control_kp,0,0.015);
+    change_control_values(&control_vals);
     next_kp_update = millis() + 1000;
   }
 
@@ -217,7 +310,25 @@ void loop()
   //   lcd.setCursor(0,9);
   //   lcd.print(newPos);
   //   lastPos = newPos;
-  // } 
+  // }
+    //Serial.println("Target Velocity: ");
+    // Serial.print(motor_target);
+    // Serial.print(" ");
+    // //Serial.println("Real Velocity: ");
+    // Serial.println(motor_velocity); 
+}
+
+
+void change_control_values(ControlVals *vals)
+{
+    // control_rango = map(analogRead(PIN_REGULADOR_RANGO),0,1024,0,50);
+    // control_tiempo = map(analogRead(PIN_REGULADOR_TIEMPO),0,1024,2000,10000);
+    // control_kp = ((double)map(analogRead(PIN_REGULADOR_P),0,1024,100,2500))/10000;
+
+    
+    
+    //motor.SetTunings(control_kp,0,0.015);
+
 }
 
 void BlinkLED() 
@@ -241,6 +352,21 @@ int16_t calculate_position()
   return pos;
 }
 
+int16_t calculate_angular_velocity()
+{
+  static int16_t prev_position = zero_position;
+  int16_t velocity = (motor_angular_position - prev_position)/MOTOR_UPDATE_DELAY;
+  prev_position = motor_angular_position;
+  return velocity;
+}
+
+int16_t calculate_angular_acceleration()
+{
+  static int16_t prev_velocity = 0;
+  int16_t acceleration = (motor_velocity - prev_velocity)/MOTOR_UPDATE_DELAY;
+  prev_velocity = motor_velocity;
+  return acceleration;
+}
 void calibrate()
 {
   static int16_t prev_position = 0, init_position = 0;

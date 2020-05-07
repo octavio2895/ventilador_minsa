@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
+#include <SerialTransfer.h>
 
 
 // Pin definitions.
@@ -15,9 +16,12 @@
 #define PIN_PWM PA3
 #define PIN_LIMIT_SWITCH PA8
 #define PIN_INVERT PA9
-#define PIN_REGULADOR_P PA0 // UPDATE kp de 0.01 - 0.25
-#define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
-#define PIN_REGULADOR_TIEMPO PA2 //
+#define PIN_POT_KP PA0 // UPDATE kp de 0.01 - 0.25
+#define PIN_POT_RANGE PA1 //UPDATE ANGULO DE OPERACION
+#define PIN_POT_PERIOD PA2 //
+#define PIN_SERIAL_TRANSFER_RX PA3 //
+#define PIN_SERIAL_TRANSFER_TX PA2 //
+
 
 // Physical constraints.
 #define ROTARYMIN 0
@@ -30,6 +34,8 @@
 #define MOTOR_UPDATE_DELAY 50
 #define SCREEN_UPDATE_DELAY 100
 #define BLINK_DELAY 500
+#define SERIAL_TRANSFER_DELAY 500
+
 
 // Parameter
 #define CAL_PWM 10
@@ -43,14 +49,12 @@
 
 // Structs and Enums
 enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
-
-// struct MOTOR {
-
-//   bool DIR_A;
-//   bool DIR_B;
-//   bool is_;
-
-// };
+struct DATA {
+  bool blinker;
+  float humidity;
+  float temperature;
+  float heatIndex;
+} transfer_data;
 
 // Global vars.
 double motor_position, motor_output, motor_target, kp = 5, ki = 0/*.0005*/, kd = 0.015;
@@ -59,7 +63,9 @@ uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_dir_change, next_screen_update, next_kp_update;
 
 double control_kp;
-uint16_t control_tiempo, control_rango;
+uint16_t set_period, set_range;
+
+uint16_t next_transfer_update;
 
 
 // Global objects.
@@ -67,27 +73,9 @@ RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PA0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
 Servo myservo;
+SerialTransfer my_transfer;
+HardwareSerial Serial2(PIN_SERIAL_TRANSFER_RX, PIN_SERIAL_TRANSFER_TX);
 
-// Last known rotary position.
-// int lastPos = 0;
-// uint32_t delayBlink = 1500;
-// uint32_t currentTime;
-// bool forward = true;
-
-// u_int16_t refreshScreen = 100;
-// int a = 5;
-// bool test = true;
-/*
-void encoderISR() {
-  encoder.readAB();
-}
-
-void encoderButtonISR() {
-  encoder.readPushButton();
-}*/
-// void ISR(PCINT1_vect) {
-//   encoder.tick(); // just call tick() to check the state.
-// }
 
 // Prototypes
 void BlinkLED();
@@ -99,23 +87,19 @@ void encoderISR();
 int16_t deg_to_clicks(double deg);
 
 
-
-
 void setup()
 {
-
 
   pinMode(PIN_DIR_A, OUTPUT);
   pinMode(PIN_DIR_B, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_INVERT, INPUT);
+  pinMode(PIN_POT_KP, INPUT_ANALOG);
+  pinMode(PIN_POT_RANGE, INPUT_ANALOG);
+  pinMode(PIN_POT_PERIOD, INPUT_ANALOG);
 
-  pinMode(PIN_REGULADOR_P, INPUT_ANALOG);
-  pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
-  pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
 
-
-  if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PA0);
+  if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PA0); // Maybe?  analogWriteFrequency(1000);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
@@ -125,47 +109,44 @@ void setup()
   
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
-  // lcd.print(F("Encoder: "));
-  analogWrite(PIN_PWM, 255);
-  analogWriteFrequency(1000);
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
   myservo.attach(PIN_PWM, 1000, 2000);
   myservo.writeMicroseconds(1500);
-  // currentTime = millis();
+
+  Serial2.begin(115200);
+  my_transfer.begin(Serial2);
 } 
 
 void loop() 
 {
   
   BlinkLED();
-  //Lecturas
 
   // if(!cal_flag) calibrate();
-  
-  
+
   if(millis()>next_dir_change)
   {
     if (dir)
     {
-      motor_target = control_rango; //100 A -100 ES EL ANGULO 0 - 1024 MAPEAR DE 0 A 200
+      motor_target = set_range; //100 A -100 ES EL ANGULO 0 - 1024 MAPEAR DE 0 A 200
       dir = !dir;
     }
     else
     {
-      motor_target = -control_rango;
+      motor_target = -set_range;
       dir = !dir;
     }
-    next_dir_change = millis() + control_tiempo; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
+    next_dir_change = millis() + set_period; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
   }
+
 
   if(millis()>next_motor_update)
   {
     motor_position = (double) calculate_position();
     motor.Compute();
     motor_write(motor_output);
-    // analogWrite(PIN_PWM, 256);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
@@ -173,8 +154,7 @@ void loop()
   if (millis()>next_screen_update) 
   {
     lcd.clear();
-    lcd.print("Encoder:");
-    // lcd.setCursor(9,0);
+    lcd.print("Enc:");
     lcd.print(encoder.getPosition());
     lcd.print("kp:");
     lcd.print(control_kp);
@@ -182,41 +162,25 @@ void loop()
     lcd.print("O:");
     lcd.print(motor_output);
     lcd.print("T:");
-    lcd.print(motor_target);
-    
-    
+    lcd.print(motor_target);    
     next_screen_update = millis() + 500;
   }
 
   if (millis()>next_kp_update)
   {
-    control_rango = map(analogRead(PIN_REGULADOR_RANGO),0,1024,0,50);
-    control_tiempo = map(analogRead(PIN_REGULADOR_TIEMPO),0,1024,2000,10000);
-    control_kp = ((double)map(analogRead(PIN_REGULADOR_RANGO),0,1024,100,2500))/10000;
-
-    
-    
-    //motor.SetTunings(control_kp,0,0.015);
+    set_range = map(analogRead(PIN_POT_RANGE),0,1024,0,50);
+    set_period = map(analogRead(PIN_POT_PERIOD),0,1024,2000,10000);
+    control_kp = ((double)map(analogRead(PIN_POT_RANGE),0,1024,100,2500))/10000;
+    motor.SetTunings(control_kp,0,0.015);
     next_kp_update = millis() + 1000;
   }
 
-  // if (newPos < ROTARYMIN) 
-  // {
-  //   digitalWrite(pinMotor1, LOW);
-  //   digitalWrite(pinMotor2, HIGH);
-  // } 
-  // else if (newPos > ROTARYMAX) 
-  // {
-  //   digitalWrite(pinMotor1,HIGH);
-  //   digitalWrite(pinMotor2,LOW);
-  // }
-
-  // if (lastPos != newPos) 
-  // {
-  //   lcd.setCursor(0,9);
-  //   lcd.print(newPos);
-  //   lastPos = newPos;
-  // } 
+  if (millis()>next_transfer_update) 
+  {
+    my_transfer.txObj(transfer_data, sizeof(transfer_data));
+    my_transfer.sendData(sizeof(transfer_data));
+    next_transfer_update = millis() + SERIAL_TRANSFER_DELAY;
+  }
 }
 
 void BlinkLED() 

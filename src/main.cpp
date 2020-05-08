@@ -27,9 +27,10 @@
 #define MOTOR_DZ 0 //165
 
 // Update rates.
-#define MOTOR_UPDATE_DELAY 10
-#define SCREEN_UPDATE_DELAY 100
-#define BLINK_DELAY 500
+#define MOTOR_UPDATE_DELAY    10
+#define MOTOR_SPEED_DELAY     20
+#define SCREEN_UPDATE_DELAY   100
+#define BLINK_DELAY           500
 
 // Parameter
 #define CAL_PWM 10
@@ -41,10 +42,12 @@
 #define CAL_TICKS 5
 
 //Experiment
-#define RISE_TIME 800
-#define FALL_TIME 800
-#define ACC_TIME  150
-#define DEGREES   6
+#define RISE_TIME     2000
+#define DEAD_TIME     0//1000
+#define FALL_TIME     2000
+#define WAITING_TIME  3000
+#define ACC_TIME      800
+#define DEGREES       360
 
 
 // Structs and Enums
@@ -66,15 +69,13 @@ uint16_t control_tiempo = 2000, control_rango = 75;
 }control_vals;
 
 // Global vars.
-double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, kp = 20000, ki = 0/*.0005*/, kd = 0.05;
+double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, kp = 1150, ki = 0/*.0005*/, kd = 0;
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_dir_change, next_screen_update, next_kp_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
 float const_vel_time_rise, const_vel_time_fall;
-float theta_dot_max, print_curr_step, print_m_target;
+float theta_dot_max_rise,theta_dot_max_fall, print_curr_step, print_m_target,print_m_vel,print_pos;
 double acum_error;
-
-
 
 
 // Global objects.
@@ -112,12 +113,12 @@ void calibrate();
 void motor_set_dir(double);
 void motor_write(double);
 int16_t calculate_position();
-int16_t calculate_angular_velocity();
+float calculate_angular_velocity();
 int16_t calculate_angular_acceleration();
 void encoderISR();
 int16_t deg_to_clicks(double deg);
 double clicks_to_deg(int16_t clicks);
-
+float arr_average(float *arr, uint16_t size);
 
 
 
@@ -151,7 +152,7 @@ void setup()
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
-  //Serial.begin(115200);
+  Serial.begin(9600);
   //Serial.println("Booting up!");
 
 
@@ -164,7 +165,9 @@ void setup()
 
   const_vel_time_rise = RISE_TIME - 2*ACC_TIME;
   const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
-  theta_dot_max = -DEGREES/(const_vel_time_rise+ACC_TIME);
+  theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
+  theta_dot_max_fall = 36/10;//DEGREES/(const_vel_time_fall+ACC_TIME);
+
 } 
 
 void loop() 
@@ -199,23 +202,24 @@ void loop()
   if(millis()>next_motor_update)
   {
     motor_position = (double) calculate_position();
-    motor_angular_position = clicks_to_deg(motor_position);
-    motor_velocity = (double) calculate_angular_velocity();
-    motor_acceleration = (double) calculate_angular_acceleration();
-    uint32_t initial_pos = 0;
+    // motor_angular_position = (double) clicks_to_deg(motor_position);
+    // motor_velocity = (double) calculate_angular_velocity();
+    // motor_acceleration = (double) calculate_angular_acceleration();
+    static float initial_pos = -177;
   
     static uint32_t initial_millis = millis();
     
-    float current_step = (millis()-initial_millis)%(RISE_TIME+FALL_TIME);
+    float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME/*+WAITING_TIME*/);
     print_curr_step = current_step;
     
     //Rising
-    if(motor_position > initial_pos)
-    {
-      motor_target = 0;
-      //motor_target = - theta_dot_max;
-    }
-    else if(current_step <= ACC_TIME)
+    // if(motor_position < initial_pos && current_step > (ACC_TIME + const_vel_time_rise) && current_step <= RISE_TIME)
+    // {
+    //   motor_target = 0;
+      
+    // }
+    /*else */
+    if(current_step <= ACC_TIME)
     {
       if(is_falling)
       {
@@ -223,23 +227,28 @@ void loop()
       }
       is_falling = 0;
       //is_rising = 1;
-      motor_target = (theta_dot_max/ACC_TIME)*(current_step);
+      motor_target = (theta_dot_max_rise/ACC_TIME)*(current_step);
     }
     else if (current_step > ACC_TIME && current_step <= ACC_TIME+const_vel_time_rise)
     {
-      motor_target = theta_dot_max;
+      motor_target = theta_dot_max_rise;
     }
     else if (current_step > (ACC_TIME + const_vel_time_rise) && current_step <= RISE_TIME)
     {
-      motor_target = -(theta_dot_max/ACC_TIME)*(current_step-(ACC_TIME+const_vel_time_rise))+theta_dot_max;
+      motor_target = -(theta_dot_max_rise/ACC_TIME)*(current_step-(ACC_TIME+const_vel_time_rise))+theta_dot_max_rise;
     }
-    //Falling
-    else if (motor_position > 0)
-    { 
+    //Dead time
+    else if ( current_step > RISE_TIME && current_step <= RISE_TIME+DEAD_TIME)
+    {
       motor_target = 0;
-    } 
+    }    
+    //Falling
+    // else if (motor_position > 0)
+    // { 
+    //   motor_target = 0;
+    // } 
     
-    else if (current_step > RISE_TIME && current_step <= (RISE_TIME+ACC_TIME))
+    else if (current_step > RISE_TIME+DEAD_TIME && current_step <= (RISE_TIME+ACC_TIME+DEAD_TIME))
     {
       if(is_rising)
       {
@@ -247,19 +256,26 @@ void loop()
       }
       is_rising = 0;
       is_falling = 1;
-      motor_target = -(theta_dot_max/ACC_TIME)*(current_step-RISE_TIME);
+      motor_target = -(theta_dot_max_fall/ACC_TIME)*(current_step-(RISE_TIME+DEAD_TIME));
     }
-    else if (current_step > (RISE_TIME + ACC_TIME) && current_step <= (RISE_TIME + ACC_TIME + const_vel_time_fall))
+    else if (current_step > (RISE_TIME + DEAD_TIME + ACC_TIME) && current_step <= (RISE_TIME + DEAD_TIME + ACC_TIME + const_vel_time_fall))
     {
-      motor_target = -theta_dot_max;
+      motor_target = -theta_dot_max_fall;
     }
-    else if (current_step > (RISE_TIME + ACC_TIME + const_vel_time_fall) && current_step <= (RISE_TIME+FALL_TIME))
+    else if (current_step > (RISE_TIME + DEAD_TIME + ACC_TIME + const_vel_time_fall) && current_step <= (RISE_TIME+DEAD_TIME+FALL_TIME))
     {
-      motor_target = (theta_dot_max/ACC_TIME)*(current_step-(RISE_TIME+ACC_TIME+const_vel_time_fall))-theta_dot_max;
+      motor_target = (theta_dot_max_fall/ACC_TIME)*(current_step-(RISE_TIME+DEAD_TIME+ACC_TIME+const_vel_time_fall))-theta_dot_max_fall;
+    }
+    else if (current_step > (RISE_TIME+DEAD_TIME+FALL_TIME) && current_step <= (RISE_TIME+DEAD_TIME+FALL_TIME+WAITING_TIME))
+    {
+      motor_target = 0;
     }
     acum_error += motor_target*MOTOR_UPDATE_DELAY;
+    //motor_target = (theta_dot_max_rise/ACC_TIME)*(current_step);
+
+    print_m_target = motor_target*1000 ;//motor_target*1000;//motor_target*1000;
     
-    print_m_target = motor_target*1000;
+    print_pos = motor_angular_position;
     motor.Compute();
     motor_write(motor_output); //PWM
     // analogWrite(PIN_PWM, 256);
@@ -267,6 +283,16 @@ void loop()
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
+
+  if(millis()>next_speed_update)
+  {
+    print_m_vel = motor_velocity*1000;
+    motor_angular_position = (double) clicks_to_deg(motor_position);
+    motor_velocity = (double) calculate_angular_velocity();
+    
+    
+    next_speed_update = millis() + MOTOR_SPEED_DELAY;
+  }
   //LCD
   if (millis()>next_screen_update) 
   {
@@ -312,10 +338,17 @@ void loop()
   //   lastPos = newPos;
   // }
     //Serial.println("Target Velocity: ");
-    // Serial.print(motor_target);
+    //Serial.print(print_m_target);encoder.getPosition()
+    Serial.print(" ");
+    Serial.print(print_m_target);
+    Serial.print(" ");
+    //Serial.println("Real Velocity: ");
+    Serial.print(motor_output);
+    Serial.print(" ");
+    // Serial.print(print_pos);
     // Serial.print(" ");
-    // //Serial.println("Real Velocity: ");
-    // Serial.println(motor_velocity); 
+    Serial.println(print_m_vel);
+
 }
 
 
@@ -352,11 +385,12 @@ int16_t calculate_position()
   return pos;
 }
 
-int16_t calculate_angular_velocity()
+float calculate_angular_velocity()
 {
-  static int16_t prev_position = zero_position;
-  int16_t velocity = (motor_angular_position - prev_position)/MOTOR_UPDATE_DELAY;
+  static float prev_position, old_millis;
+  float velocity = (motor_angular_position - prev_position)/(millis()-old_millis);
   prev_position = motor_angular_position;
+  old_millis = millis();
   return velocity;
 }
 
@@ -457,7 +491,17 @@ void motor_set_dir(double pwm)
 
 void motor_write(double pwm)
 {
-  myservo.writeMicroseconds(1500+pwm);
+  static double signal;
+  if(pwm > 0)
+  {
+    signal = map(pwm, 0, 500, 30, 500);
+  }
+  else
+  {
+    signal = map(pwm, -500, 0, -500, -30);
+  }
+  
+  myservo.writeMicroseconds(1500+signal);
 }
 
 double clicks_to_deg(int16_t clicks)

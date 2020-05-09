@@ -285,10 +285,9 @@ void mimo_control()
   static float error_position;
   static float error_velocity, prev_velocity;
   static double motor_pwm;
-  float current_step = millis()%RISE_TIME;
   static float old_millis;
   static uint32_t initial_millis = millis();
-  float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME/*+WAITING_TIME*/);
+  float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME+WAITING_TIME*/);
 
   //Define Target values
   if (millis()>next_target_update)

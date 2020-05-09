@@ -31,6 +31,7 @@
 #define MOTOR_SPEED_DELAY     20
 #define SCREEN_UPDATE_DELAY   100
 #define BLINK_DELAY           500
+#define TARGET_UPDATE_DELAY   100
 
 // Parameter
 #define CAL_PWM 10
@@ -48,7 +49,10 @@
 #define WAITING_TIME  3000
 #define ACC_TIME      800
 #define DEGREES       360
+#define FILTER        15
 
+#define K1            0
+#define K2            0
 
 // Structs and Enums
 enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
@@ -69,7 +73,7 @@ uint16_t control_tiempo = 2000, control_rango = 75;
 }control_vals;
 
 // Global vars.
-double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, kp = 1150, ki = 0/*.0005*/, kd = 0;
+double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, target_position, target_velocity, kp = 1150, ki = 0/*.0005*/, kd = 0;
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
@@ -121,6 +125,8 @@ double clicks_to_deg(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void velocity_control();
 void mimo_control();
+double get_target_position(float);
+double get_target_velocity(float);
 
 
 
@@ -209,15 +215,15 @@ void loop()
   }
 
 
-  if(millis()>next_speed_update)
-  {
-    print_m_vel = motor_velocity*1000;
-    motor_angular_position = (double) clicks_to_deg(motor_position);
-    motor_velocity = (double) calculate_angular_velocity();
+  // if(millis()>next_speed_update)
+  // {
+  //   print_m_vel = motor_velocity*1000;
+  //   motor_angular_position = (double) clicks_to_deg(motor_position);
+  //   motor_velocity = (double) calculate_angular_velocity();
     
     
-    next_speed_update = millis() + MOTOR_SPEED_DELAY;
-  }
+  //   next_speed_update = millis() + MOTOR_SPEED_DELAY;
+  // }
   //LCD
   if (millis()>next_screen_update) 
   {
@@ -278,28 +284,41 @@ void loop()
 
 void mimo_control()
 {
+  static uint32_t next_target_update = 0;
   static float error_position;
-  static float error_velocity;
-  static float motor_pwm;
+  static float error_velocity, prev_velocity;
+  static double motor_pwm;
   float current_step = millis()%RISE_TIME;
   static float old_millis;
+  static uint32_t initial_millis = millis();
+  float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME/*+WAITING_TIME*/);
 
   //Define Target values
-
+  if (millis()>next_target_update)
+  {
+    next_target_update = millis() + TARGET_UPDATE_DELAY;
+    target_position = get_target_position(current_step);
+    target_velocity = get_target_velocity(current_step);
+  }
 
   //Read Real values
-
-
+  motor_position = (double) calculate_position();   //Position
+  motor_angular_position = (double) clicks_to_deg(motor_position);
+  motor_velocity = (double) ((calculate_angular_velocity() + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
+  prev_velocity = motor_velocity;
   //Calculate error
-
+  error_position = target_position - motor_position;
+  error_velocity = target_velocity - motor_velocity;
 
   //Motor Output
+  motor_pwm = K1 * error_position + K2 * error_velocity;
+  motor_write(motor_pwm); //PWM
   
 
 }
 void velocity_control()
 {
-      motor_position = (double) calculate_position();
+    motor_position = (double) calculate_position();
     // motor_angular_position = (double) clicks_to_deg(motor_position);
     // motor_velocity = (double) calculate_angular_velocity();
     // motor_acceleration = (double) calculate_angular_acceleration();
@@ -377,6 +396,18 @@ void velocity_control()
     motor.Compute();
     motor_write(motor_output); //PWM
     // analogWrite(PIN_PWM, 256);
+}
+double get_target_position(float current_step)
+{
+  if(current_step <= ACC_TIME)
+    {
+    }
+}
+double get_target_velocity(float current_step)
+{
+  if(current_step <= ACC_TIME)
+    {
+    }
 }
 
 void change_control_values(ControlVals *vals)

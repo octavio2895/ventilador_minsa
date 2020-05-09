@@ -119,6 +119,8 @@ void encoderISR();
 int16_t deg_to_clicks(double deg);
 double clicks_to_deg(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
+void velocity_control();
+void mimo_control();
 
 
 
@@ -201,7 +203,103 @@ void loop()
 
   if(millis()>next_motor_update)
   {
-    motor_position = (double) calculate_position();
+    mimo_control();
+    //velocity_control();
+    next_motor_update = millis() + MOTOR_UPDATE_DELAY;
+  }
+
+
+  if(millis()>next_speed_update)
+  {
+    print_m_vel = motor_velocity*1000;
+    motor_angular_position = (double) clicks_to_deg(motor_position);
+    motor_velocity = (double) calculate_angular_velocity();
+    
+    
+    next_speed_update = millis() + MOTOR_SPEED_DELAY;
+  }
+  //LCD
+  if (millis()>next_screen_update) 
+  {
+    lcd.clear();
+    lcd.print("Enc:");
+    // lcd.setCursor(9,0);
+    lcd.print(encoder.getPosition());
+    lcd.print(" ST:");
+    lcd.print((int)print_curr_step);
+    // lcd.print("pwm");
+    // lcd.print(pwm);
+    lcd.setCursor(0,1);
+    lcd.print("O:");
+    lcd.print(motor_output);
+    lcd.print("T:");
+    lcd.print(print_m_target);
+    
+    
+    next_screen_update = millis() + 500;
+  }
+
+  if (millis()>next_kp_update)
+  {
+    change_control_values(&control_vals);
+    next_kp_update = millis() + 1000;
+  }
+
+  // if (newPos < ROTARYMIN) 
+  // {
+  //   digitalWrite(pinMotor1, LOW);
+  //   digitalWrite(pinMotor2, HIGH);
+  // } 
+  // else if (newPos > ROTARYMAX) 
+  // {
+  //   digitalWrite(pinMotor1,HIGH);
+  //   digitalWrite(pinMotor2,LOW);
+  // }
+
+  // if (lastPos != newPos) 
+  // {
+  //   lcd.setCursor(0,9);
+  //   lcd.print(newPos);
+  //   lastPos = newPos;
+  // }
+    //Serial.println("Target Velocity: ");
+    //Serial.print(print_m_target);encoder.getPosition()
+    Serial.print(" ");
+    Serial.print(print_m_target);
+    Serial.print(" ");
+    //Serial.println("Real Velocity: ");
+    Serial.print(motor_output);
+    Serial.print(" ");
+    // Serial.print(print_pos);
+    // Serial.print(" ");
+    Serial.println(print_m_vel);
+
+}
+
+void mimo_control()
+{
+  static float error_position;
+  static float error_velocity;
+  static float motor_pwm;
+  float current_step = millis()%RISE_TIME;
+  static float old_millis;
+
+  //Define Target values
+
+
+  //Read Real values
+
+
+  //Calculate error
+
+
+  //Motor Output
+  
+
+}
+void velocity_control()
+{
+      motor_position = (double) calculate_position();
     // motor_angular_position = (double) clicks_to_deg(motor_position);
     // motor_velocity = (double) calculate_angular_velocity();
     // motor_acceleration = (double) calculate_angular_acceleration();
@@ -279,78 +377,7 @@ void loop()
     motor.Compute();
     motor_write(motor_output); //PWM
     // analogWrite(PIN_PWM, 256);
-    
-    next_motor_update = millis() + MOTOR_UPDATE_DELAY;
-  }
-
-
-  if(millis()>next_speed_update)
-  {
-    print_m_vel = motor_velocity*1000;
-    motor_angular_position = (double) clicks_to_deg(motor_position);
-    motor_velocity = (double) calculate_angular_velocity();
-    
-    
-    next_speed_update = millis() + MOTOR_SPEED_DELAY;
-  }
-  //LCD
-  if (millis()>next_screen_update) 
-  {
-    lcd.clear();
-    lcd.print("Enc:");
-    // lcd.setCursor(9,0);
-    lcd.print(encoder.getPosition());
-    lcd.print(" ST:");
-    lcd.print((int)print_curr_step);
-    // lcd.print("pwm");
-    // lcd.print(pwm);
-    lcd.setCursor(0,1);
-    lcd.print("O:");
-    lcd.print(motor_output);
-    lcd.print("T:");
-    lcd.print(print_m_target);
-    
-    
-    next_screen_update = millis() + 500;
-  }
-
-  if (millis()>next_kp_update)
-  {
-    change_control_values(&control_vals);
-    next_kp_update = millis() + 1000;
-  }
-
-  // if (newPos < ROTARYMIN) 
-  // {
-  //   digitalWrite(pinMotor1, LOW);
-  //   digitalWrite(pinMotor2, HIGH);
-  // } 
-  // else if (newPos > ROTARYMAX) 
-  // {
-  //   digitalWrite(pinMotor1,HIGH);
-  //   digitalWrite(pinMotor2,LOW);
-  // }
-
-  // if (lastPos != newPos) 
-  // {
-  //   lcd.setCursor(0,9);
-  //   lcd.print(newPos);
-  //   lastPos = newPos;
-  // }
-    //Serial.println("Target Velocity: ");
-    //Serial.print(print_m_target);encoder.getPosition()
-    Serial.print(" ");
-    Serial.print(print_m_target);
-    Serial.print(" ");
-    //Serial.println("Real Velocity: ");
-    Serial.print(motor_output);
-    Serial.print(" ");
-    // Serial.print(print_pos);
-    // Serial.print(" ");
-    Serial.println(print_m_vel);
-
 }
-
 
 void change_control_values(ControlVals *vals)
 {

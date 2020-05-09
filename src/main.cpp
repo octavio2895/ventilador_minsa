@@ -244,7 +244,6 @@ void loop()
     
     next_screen_update = millis() + 500;
   }
-
   if (millis()>next_kp_update)
   {
     change_control_values(&control_vals);
@@ -260,9 +259,7 @@ void loop()
   // {
   //   digitalWrite(pinMotor1,HIGH);
   //   digitalWrite(pinMotor2,LOW);
-  // }
-
-  // if (lastPos != newPos) 
+  // }Merge branch 'master' of https://github.com/butuq/stPos != newPos) 
   // {
   //   lcd.setCursor(0,9);
   //   lcd.print(newPos);

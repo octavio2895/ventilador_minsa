@@ -51,8 +51,21 @@
 #define DEGREES       360
 #define FILTER        15
 
-#define K1            0
-#define K2            0
+#define K1            1076
+#define K2            79
+
+//Targets times
+#define FIRST_TIME         300
+#define SECOND_TIME        1300
+#define THIRD_TIME         2000
+
+//Target degrees
+#define F_DEG         5
+#define S_DEG         11
+#define T_DEG         15
+
+
+//1076 & 79
 
 // Structs and Enums
 enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
@@ -121,12 +134,13 @@ float calculate_angular_velocity();
 int16_t calculate_angular_acceleration();
 void encoderISR();
 int16_t deg_to_clicks(double deg);
-double clicks_to_deg(int16_t clicks);
+double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void velocity_control();
 void mimo_control();
 double get_target_position(float);
 double get_target_velocity(float);
+double deg_to_rad(double);
 
 
 
@@ -218,7 +232,7 @@ void loop()
   // if(millis()>next_speed_update)
   // {
   //   print_m_vel = motor_velocity*1000;
-  //   motor_angular_position = (double) clicks_to_deg(motor_position);
+  //   motor_angular_position = (double) clicks_to_rad(motor_position);
   //   motor_velocity = (double) calculate_angular_velocity();
     
     
@@ -284,8 +298,7 @@ void mimo_control()
   static uint32_t next_target_update = 0;
   static float error_position;
   static float error_velocity, prev_velocity;
-  static double motor_pwm;
-  static float old_millis;
+  static double motor_pwm, motor_volts;
   static uint32_t initial_millis = millis();
   float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME+WAITING_TIME*/);
 
@@ -299,7 +312,7 @@ void mimo_control()
 
   //Read Real values
   motor_position = (double) calculate_position();   //Position
-  motor_angular_position = (double) clicks_to_deg(motor_position);
+  motor_angular_position = (double) clicks_to_rad(motor_position);
   motor_velocity = (double) ((calculate_angular_velocity() + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
   prev_velocity = motor_velocity;
   //Calculate error
@@ -307,7 +320,9 @@ void mimo_control()
   error_velocity = target_velocity - motor_velocity;
 
   //Motor Output
-  motor_pwm = K1 * error_position + K2 * error_velocity;
+  motor_volts = K1 * error_position * 1000 + K2 * error_velocity * 1000; //V/rad
+  
+  motor_pwm = map(motor_volts, 0, 12, 0, 500);
   motor_write(motor_pwm); //PWM
   
 
@@ -315,7 +330,7 @@ void mimo_control()
 void velocity_control()
 {
     motor_position = (double) calculate_position();
-    // motor_angular_position = (double) clicks_to_deg(motor_position);
+    // motor_angular_position = (double) clicks_to_rad(motor_position);
     // motor_velocity = (double) calculate_angular_velocity();
     // motor_acceleration = (double) calculate_angular_acceleration();
     static float initial_pos = -177;
@@ -395,15 +410,35 @@ void velocity_control()
 }
 double get_target_position(float current_step)
 {
-  if(current_step <= ACC_TIME)
-    {
-    }
+  double target_pos;
+  if(current_step <= FIRST_TIME)
+  {
+    target_pos = (deg_to_rad(F_DEG))/FIRST_TIME*(current_step);
+  }
+  else if (current_step > FIRST_TIME && current_step <= SECOND_TIME)
+  {
+    target_pos = (deg_to_rad(S_DEG-F_DEG))/(SECOND_TIME-FIRST_TIME)*(current_step)+F_DEG;
+  }
+  else if (current_step > SECOND_TIME && current_step <= THIRD_TIME)
+  {
+    target_pos = 0.002828 * (pow(current_step-1300,0.5)+ 67.8823);
+  }
 }
 double get_target_velocity(float current_step)
 {
-  if(current_step <= ACC_TIME)
-    {
-    }
+  double target_vel;
+  if(current_step <= FIRST_TIME)
+  {
+    target_vel = (deg_to_rad(F_DEG))/FIRST_TIME;
+  }
+  else if (current_step > FIRST_TIME && current_step <= SECOND_TIME)
+  {
+    target_vel = (deg_to_rad(S_DEG-F_DEG))/(SECOND_TIME-FIRST_TIME);
+  }
+  else if (current_step > SECOND_TIME && current_step <= THIRD_TIME)
+  {
+    target_vel = 0.001414/pow((current_step-1300),0.5);
+  }
 }
 
 void change_control_values(ControlVals *vals)
@@ -558,9 +593,9 @@ void motor_write(double pwm)
   myservo.writeMicroseconds(1500+signal);
 }
 
-double clicks_to_deg(int16_t clicks)
+double clicks_to_rad(int16_t clicks)
 {
-  return((double)(((double)360/(double)ENCODER_CPR)*(double)clicks));
+  return((double)(((double)360*((double)(3.1416/180))/(double)ENCODER_CPR)*(double)clicks));
 }
 
 int16_t deg_to_clicks(double deg)
@@ -568,6 +603,10 @@ int16_t deg_to_clicks(double deg)
   return((int16_t)((deg/360)*ENCODER_CPR));
 }
 
+double deg_to_rad(double deg)
+{
+  return((double)((deg*3.1416/180)));
+}
 
 // void super_calibrate()
 // {

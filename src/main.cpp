@@ -15,7 +15,7 @@
 #define PIN_PWM PA3
 #define PIN_LIMIT_SWITCH PA8
 #define PIN_INVERT PB10
-#define PIN_REGULADOR_P PA0 // UPDATE kp de 0.01 - 0.25
+#define PIN_SERIAL PA0 // UPDATE kp de 0.01 - 0.25
 #define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
 #define PIN_REGULADOR_TIEMPO PA2 //
 
@@ -43,26 +43,30 @@
 #define CAL_TICKS 5
 
 //Experiment
-#define RISE_TIME     2000
+#define RISE_TIME     3000
 #define DEAD_TIME     0//1000
 #define FALL_TIME     2000
-#define WAITING_TIME  3000
+#define WAITING_TIME  500
 #define ACC_TIME      800
 #define DEGREES       360
-#define FILTER        15
+#define FILTER        2
+#define FILTER_PWM    0
 
-#define K1            1076
-#define K2            79
+#define K1            1077
+#define K2            90
 
 //Targets times
-#define FIRST_TIME         300
-#define SECOND_TIME        1300
-#define THIRD_TIME         2000
+#define FIRST_TIME         600
+#define SECOND_TIME        2000
+#define THIRD_TIME         3000
 
 //Target degrees
 #define F_DEG         5
 #define S_DEG         11
 #define T_DEG         15
+
+//Target deg/s
+#define DEG_P_SEG     6
 
 
 //1076 & 79
@@ -92,11 +96,12 @@ uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
 float const_vel_time_rise, const_vel_time_fall;
 float theta_dot_max_rise,theta_dot_max_fall, print_curr_step, print_m_target,print_m_vel,print_pos;
-double acum_error;
+uint32_t volatile start_pulse, end_pulse, pulse_width;
+bool volatile signal;
 
 
 // Global objects.
-RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PA0);
+RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 PID motor(&motor_velocity, &motor_output, &motor_target, kp, ki, kd, DIRECT); //Input, Output, and Setpoint.  Initial tuning parameters are also set here.
 //PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
@@ -138,9 +143,11 @@ double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void velocity_control();
 void mimo_control();
-double get_target_position(float);
-double get_target_velocity(float);
+double get_target_position(uint32_t);
+double get_target_velocity(uint32_t);
 double deg_to_rad(double);
+void read_control();
+void pulse_interrupt();
 
 
 
@@ -154,15 +161,16 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_INVERT, INPUT);
 
-  pinMode(PIN_REGULADOR_P, INPUT_ANALOG);
+  pinMode(PIN_SERIAL, INPUT_PULLDOWN);
   pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
   pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
 
 
-  if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PA0);
+  if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB0);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
+  //attachInterrupt(digitalPinToInterrupt(PIN_SERIAL),  pulse_interrupt, CHANGE);
 
   motor.SetMode(AUTOMATIC);
   motor.SetOutputLimits(-500,500);
@@ -223,7 +231,9 @@ void loop()
 
   if(millis()>next_motor_update)
   {
-    mimo_control();
+    //motor_write(-100);
+    //mimo_control();
+    read_control();
     //velocity_control();
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
@@ -287,10 +297,29 @@ void loop()
     // //Serial.println("Real Velocity: ");
     // Serial.print(motor_output);
     // Serial.print(" ");
-    // // Serial.print(print_pos);
+    // // Serial.p+ deg_to_rad(DEG_P_SEG)rint(print_pos);
     // // Serial.print(" ");
     // Serial.println(print_m_vel);
 
+}
+
+void read_control()
+{
+  int16_t encoder_val = encoder.getPosition();
+  static uint64_t pulse_control,i,x,y;
+  // motor_position = (double) calculate_position();   //Position
+  // motor_angular_position = (double) clicks_to_rad(motor_position);
+
+  //pulse_control = pulseIn(PIN_SERIAL,HIGH);
+  y=y+10;
+  i++;
+  x=x+5;
+  //Serial Print
+  //Serial.println(millis());
+  //Serial.print(",");
+  Serial.println(encoder_val);
+  //Serial.print("x");
+  //Serial.println(pulse_width);
 }
 
 void mimo_control()
@@ -298,43 +327,75 @@ void mimo_control()
   static uint32_t next_target_update = 0;
   static double error_position;
   static double error_velocity, prev_velocity;
-  static double motor_pwm, motor_volts;
+  static double motor_pwm, motor_volts, motor_pwm_filter, prev_pwm,motor_v_unf;
   static uint32_t initial_millis = millis();
-  float current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
+  uint32_t current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
 
   //Define Target values
   if (millis()>next_target_update)
   {
-    target_position = get_target_position(current_step);
-    target_velocity = get_target_velocity(current_step);
+    target_position = 5*get_target_position(current_step);
+    target_velocity = 5*get_target_velocity(current_step);
     next_target_update = millis() + TARGET_UPDATE_DELAY;
   }
-
+// target_position = 10*get_target_position(current_step);
+// target_velocity = get_target_velocity(current_step);
   //Read Real values
   motor_position = (double) calculate_position();   //Position
   motor_angular_position = (double) clicks_to_rad(motor_position);
-  motor_velocity = (double) ((calculate_angular_velocity() + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
+  motor_v_unf = (double) calculate_angular_velocity();
+  motor_velocity = (double) ((motor_v_unf + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
   prev_velocity = motor_velocity;
   //Calculate error
-  error_position = target_position - motor_position;
+  error_position = target_position - motor_angular_position;
   error_velocity = target_velocity - motor_velocity;
 
   //Motor Output
   motor_volts = K1 * error_position + K2 * error_velocity; //V/rad
   
   motor_pwm = map(motor_volts, 0, 12, 0, 500);
-  motor_write(motor_pwm); //PWM
+  motor_pwm_filter = (motor_pwm + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
+  prev_pwm = motor_pwm_filter;
+
+  
+  if(motor_pwm_filter > 500)
+  {
+    motor_pwm_filter = 500;
+  }
+  else if (motor_pwm_filter < -500)
+  {
+    motor_pwm_filter = -500;
+  }
+
+  if (current_step > RISE_TIME)
+  {
+    motor_pwm_filter = -100;
+  }
 
 
-  //Serial.print(target_position);
+  // if(motor_angular_position < 0)
+  // {
+  //   motor_pwm = 0;
+  // }
+  motor_write(motor_pwm_filter); //PWM
+
+
+  
+ 
+  Serial.println(millis());
   //Serial.print(" ");
-  //Serial.print(motor_volts);
-  //Serial.print(" ");
-  Serial.print(error_velocity);
-  Serial.print(" ");
-  Serial.println(error_position);
+  Serial.println(current_step);
   // Serial.print(" ");
-  // Serial.println(motor_angular_position);
+  // Serial.print(motor_v_unf);
+  // Serial.print(" ");
+  // Serial.print(motor_velocity);
+  // Serial.print(" ");
+  // Serial.println(encoder.getPosition());
+  
+  // Serial.print(" ");
+  // Serial.print(error_position);
+  // Serial.print(" ");
+  // Serial.println(error_velocity);
 
   
 
@@ -353,7 +414,7 @@ void velocity_control()
     print_curr_step = current_step;
     
     //Rising
-    // if(motor_position < initial_pos && current_step > (ACC_TIME + const_vel_time_rise) && current_step <= RISE_TIME)
+    // if(motor_position < initial_po    acum_error += motor_target*MOTOR_UPDATE_DELAY;s && current_step > (ACC_TIME + const_vel_time_rise) && current_step <= RISE_TIME)
     // {
     //   motor_target = 0;
       
@@ -410,7 +471,6 @@ void velocity_control()
     {
       motor_target = 0;
     }
-    acum_error += motor_target*MOTOR_UPDATE_DELAY;
     //motor_target = (theta_dot_max_rise/ACC_TIME)*(current_step);
 
     print_m_target = motor_target*1000 ;//motor_target*1000;//motor_target*1000;
@@ -420,47 +480,61 @@ void velocity_control()
     motor_write(motor_output); //PWM
     // analogWrite(PIN_PWM, 256);
 }
-double get_target_position(float current_step)
+double get_target_position(uint32_t current_step)
 {
-  double target_pos, p;
+  double static target_pos,prove;
+  bool static init1 = 1, init2 = 1;
+  double static last_target;
 
   if(current_step <= FIRST_TIME)
   {
-    target_pos = (deg_to_rad(F_DEG))/FIRST_TIME*(current_step);
+    init1 = 1;
+    init2 = 1;
+    target_pos = 0.5*(current_step*current_step)/1000*(deg_to_rad(DEG_P_SEG))/FIRST_TIME;
   }
-  else if (current_step > FIRST_TIME && current_step <= SECOND_TIME)
+  else if (current_step <= SECOND_TIME)
   {
-    target_pos = ((deg_to_rad(S_DEG-F_DEG))/(SECOND_TIME-FIRST_TIME))*(current_step)+deg_to_rad(F_DEG);
+    if(init1)
+    {
+      last_target = target_pos;
+      init1 = 0;
+    }
+    target_pos = deg_to_rad(DEG_P_SEG) * (current_step-FIRST_TIME)/1000 + last_target; 
   }
-  else if (current_step > SECOND_TIME && current_step <= THIRD_TIME)
+  else if (current_step <= THIRD_TIME)
   {
-    p = -(deg_to_rad(S_DEG-T_DEG)*deg_to_rad(S_DEG-T_DEG))/(4*(SECOND_TIME-THIRD_TIME));
-    target_pos = 2 * pow(p*(current_step-SECOND_TIME),0.5)+deg_to_rad(S_DEG);
+    if(init2)
+    {
+      last_target = target_pos;
+      init2 = 0;
+    }   
+    target_pos = ((deg_to_rad(-DEG_P_SEG))/(THIRD_TIME-SECOND_TIME))*(0.5*(current_step-SECOND_TIME)*(current_step-SECOND_TIME)/1000-SECOND_TIME*(current_step-SECOND_TIME)/1000)+ deg_to_rad(DEG_P_SEG)*(current_step-SECOND_TIME)/1000 + last_target;
     //target_pos = 0.002828 * (pow(current_step-1300,0.5)+ 67.8823);
   }
   else
   {
     target_pos = 0;
   }
-  
+   //prove = target_pos*100;
+  // Serial.print(last_target);
+  // Serial.print(" ");
+  //Serial.println(prove);
   return target_pos;
 }
-double get_target_velocity(float current_step)
+double get_target_velocity(uint32_t current_step)
 {
-  double target_vel,p;
+  double target_vel;
   if(current_step <= FIRST_TIME)
   {
-    target_vel = 1000*(deg_to_rad(F_DEG))/FIRST_TIME;
+    target_vel = current_step*(deg_to_rad(DEG_P_SEG))/FIRST_TIME;
   }
   else if (current_step > FIRST_TIME && current_step <= SECOND_TIME)
   {
-    target_vel = 1000*(deg_to_rad(S_DEG-F_DEG))/(SECOND_TIME-FIRST_TIME);
+    target_vel = deg_to_rad(DEG_P_SEG);
   }
   else if (current_step > SECOND_TIME && current_step <= THIRD_TIME)
   {
-    p = -(deg_to_rad(S_DEG-T_DEG)*deg_to_rad(S_DEG-T_DEG))/(4*(SECOND_TIME-THIRD_TIME));
-    target_vel = 1000*p/(pow((current_step-SECOND_TIME)*p,0.5));
-    //target_vel = 0.001414/pow((current_step-1300),0.5);
+    target_vel = ((deg_to_rad(-DEG_P_SEG))/(THIRD_TIME-SECOND_TIME))*(current_step-SECOND_TIME) + deg_to_rad(DEG_P_SEG);
   }
     else
   {
@@ -473,7 +547,7 @@ void change_control_values(ControlVals *vals)
 {
     // control_rango = map(analogRead(PIN_REGULADOR_RANGO),0,1024,0,50);
     // control_tiempo = map(analogRead(PIN_REGULADOR_TIEMPO),0,1024,2000,10000);
-    // control_kp = ((double)map(analogRead(PIN_REGULADOR_P),0,1024,100,2500))/10000;
+    // control_kp = ((double)map(analogRead(PIN_SERIAL),0,1024,100,2500))/10000;
 
     
     
@@ -496,6 +570,20 @@ void encoderISR()
   encoder.readAB();
 }
 
+void pulse_interrupt()
+{
+  signal = digitalRead(PIN_SERIAL);
+  if(signal)
+  {
+    start_pulse = micros();
+  }
+  else if(signal = 0)
+  {
+    end_pulse = micros();
+    pulse_width = end_pulse-start_pulse;
+  }
+}
+
 int16_t calculate_position()
 {
   int16_t pos = encoder.getPosition() - zero_position;
@@ -506,8 +594,8 @@ double calculate_angular_velocity()
 {
   static double prev_angular_position;
   static uint32_t  old_millis;
-  uint32_t velocity = 1000*(motor_angular_position - prev_angular_position)/(millis()- old_millis);
-  prev_angular_position = (double) clicks_to_rad(calculate_position());
+  double velocity = 1000*(motor_angular_position - prev_angular_position)/(millis()- old_millis);
+  prev_angular_position = motor_angular_position;
   old_millis = millis();
   
   return velocity;
@@ -610,17 +698,8 @@ void motor_set_dir(double pwm)
 
 void motor_write(double pwm)
 {
-  static double signal;
-  if(pwm > 0)
-  {
-    signal = map(pwm, 0, 500, 30, 500);
-  }
-  else
-  {
-    signal = map(pwm, -500, 0, -500, -30);
-  }
   
-  myservo.writeMicroseconds(1500+signal);
+  myservo.writeMicroseconds(1500+pwm);
 }
 
 double clicks_to_rad(int16_t clicks)

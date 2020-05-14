@@ -46,15 +46,16 @@
 #define RISE_TIME     3000
 #define DEAD_TIME     0//1000
 #define FALL_TIME     2000
-#define WAITING_TIME  500
+#define WAITING_TIME  2000
 #define ACC_TIME      800
 #define DEGREES       360
-#define FILTER        2
+#define FILTER        0
 #define FILTER_PWM    0
 
-#define K1            1077
-#define K2            90
-
+#define K1            1077/10
+#define K2            90/10
+#define K1_W          27
+#define K2_W          3
 //Targets times
 #define FIRST_TIME         600
 #define SECOND_TIME        2000
@@ -98,6 +99,7 @@ float const_vel_time_rise, const_vel_time_fall;
 float theta_dot_max_rise,theta_dot_max_fall, print_curr_step, print_m_target,print_m_vel,print_pos;
 uint32_t volatile start_pulse, end_pulse, pulse_width;
 bool volatile signal;
+double pos_to_vel;
 
 
 // Global objects.
@@ -232,8 +234,8 @@ void loop()
   if(millis()>next_motor_update)
   {
     //motor_write(-100);
-    //mimo_control();
-    read_control();
+    mimo_control();
+    //read_control();
     //velocity_control();
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
@@ -334,8 +336,8 @@ void mimo_control()
   //Define Target values
   if (millis()>next_target_update)
   {
-    target_position = 5*get_target_position(current_step);
-    target_velocity = 5*get_target_velocity(current_step);
+    target_position = 1*get_target_position(current_step);
+    target_velocity = 1*get_target_velocity(current_step);
     next_target_update = millis() + TARGET_UPDATE_DELAY;
   }
 // target_position = 10*get_target_position(current_step);
@@ -350,8 +352,27 @@ void mimo_control()
   error_position = target_position - motor_angular_position;
   error_velocity = target_velocity - motor_velocity;
 
+  //Error protection
+  if (error_position > 0.3)
+  {
+    error_position = 0.3;
+  }
+  else if (error_position < -0.3)
+  {
+    error_position = -0.3;
+  }
+  
   //Motor Output
-  motor_volts = K1 * error_position + K2 * error_velocity; //V/rad
+  if(current_step < RISE_TIME)
+  {
+    motor_volts = K1 * error_position + K2 * error_velocity; //V/rad
+  }
+  else
+  {
+    motor_volts = K1_W * error_position + K2_W * error_velocity;
+  }
+
+  
   
   motor_pwm = map(motor_volts, 0, 12, 0, 500);
   motor_pwm_filter = (motor_pwm + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
@@ -367,10 +388,14 @@ void mimo_control()
     motor_pwm_filter = -500;
   }
 
-  if (current_step > RISE_TIME)
-  {
-    motor_pwm_filter = -100;
-  }
+  // if (current_step > RISE_TIME)
+  // {
+  //   motor_pwm_filter = -100;
+  //   if(motor_angular_position < 0)
+  //   {
+  //     motor_pwm_filter = 40;
+  //   }
+  // }
 
 
   // if(motor_angular_position < 0)
@@ -381,21 +406,33 @@ void mimo_control()
 
 
   
- 
-  Serial.println(millis());
-  //Serial.print(" ");
-  Serial.println(current_step);
-  // Serial.print(" ");
-  // Serial.print(motor_v_unf);
-  // Serial.print(" ");
-  // Serial.print(motor_velocity);
-  // Serial.print(" ");
-  // Serial.println(encoder.getPosition());
+  //  Serial.print(error_position);
+  //  Serial.print(" ");
+  //  Serial.print(motor_angular_position);
+  //  Serial.print(" ");
+  //  Serial.println(target_position);
+
+  //  Serial.print(error_position);
+  //  Serial.print(" ");
+  //  Serial.print(target_position,5);
+  //  Serial.print(" ");
+  //  Serial.println(motor_volts,5);
+
+  // Serial.println(millis());
+  // Serial.println(target_position, 5);
+  // Serial.println(error_position,5);
+  // Serial.println(motor_pwm_filter);
+  // Serial.println(motor_angular_position,5);
+  // Serial.println(motor_volts);
+  // Serial.println(target_velocity,5);
   
-  // Serial.print(" ");
-  // Serial.print(error_position);
-  // Serial.print(" ");
-  // Serial.println(error_velocity);
+  // Serial.println(motor_velocity,5);
+  
+  
+
+  // Serial.println(current_step,5);
+
+  // Serial.println(error_velocity,5);
 
   
 
@@ -483,13 +520,14 @@ void velocity_control()
 double get_target_position(uint32_t current_step)
 {
   double static target_pos,prove;
-  bool static init1 = 1, init2 = 1;
+  bool static init1 = 1, init2 = 1, init3 = 1;
   double static last_target;
 
   if(current_step <= FIRST_TIME)
   {
     init1 = 1;
     init2 = 1;
+    init3 = 1;
     target_pos = 0.5*(current_step*current_step)/1000*(deg_to_rad(DEG_P_SEG))/FIRST_TIME;
   }
   else if (current_step <= SECOND_TIME)
@@ -513,7 +551,13 @@ double get_target_position(uint32_t current_step)
   }
   else
   {
-    target_pos = 0;
+    if(init3)
+    {
+      last_target = target_pos;
+      pos_to_vel = last_target;
+      init3 = 0;
+    }   
+    target_pos = (-last_target/WAITING_TIME)*(current_step-THIRD_TIME)+last_target;
   }
    //prove = target_pos*100;
   // Serial.print(last_target);
@@ -536,9 +580,9 @@ double get_target_velocity(uint32_t current_step)
   {
     target_vel = ((deg_to_rad(-DEG_P_SEG))/(THIRD_TIME-SECOND_TIME))*(current_step-SECOND_TIME) + deg_to_rad(DEG_P_SEG);
   }
-    else
+  else
   {
-    target_vel = 0;
+    target_vel = (-pos_to_vel/WAITING_TIME);
   }
   return target_vel;
 }

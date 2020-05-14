@@ -31,7 +31,7 @@
 #define MOTOR_SPEED_DELAY     20
 #define SCREEN_UPDATE_DELAY   100
 #define BLINK_DELAY           500
-#define TARGET_UPDATE_DELAY   100
+#define TARGET_UPDATE_DELAY   10
 
 // Parameter
 #define CAL_PWM 10
@@ -52,10 +52,12 @@
 #define FILTER        0
 #define FILTER_PWM    0
 
-#define K1            1077/10
-#define K2            90/10
-#define K1_W          27
-#define K2_W          3
+#define K1            85
+#define K2            8
+#define K3            120
+#define K4            8
+#define K1_W          35
+#define K2_W          1
 //Targets times
 #define FIRST_TIME         600
 #define SECOND_TIME        2000
@@ -67,7 +69,7 @@
 #define T_DEG         15
 
 //Target deg/s
-#define DEG_P_SEG     6
+#define DEG_P_SEG     8
 
 
 //1076 & 79
@@ -111,7 +113,7 @@ Servo myservo;
 
 // Last known rotary position.
 // int lastPos = 0;
-// uint32_t delayBlink = 1500;
+// uint32_t delayBlink = 15096000;
 // uint32_t currentTime;
 // bool forward = true;
 
@@ -184,7 +186,7 @@ void setup()
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
-  Serial.begin(9600);
+  Serial.begin(115200);
   //Serial.println("Booting up!");
 
 
@@ -233,7 +235,7 @@ void loop()
 
   if(millis()>next_motor_update)
   {
-    //motor_write(-100);
+    //motor_write(95);
     mimo_control();
     //read_control();
     //velocity_control();
@@ -327,7 +329,7 @@ void read_control()
 void mimo_control()
 {
   static uint32_t next_target_update = 0;
-  static double error_position;
+  static double error_position, prx1,prx2,prx3;
   static double error_velocity, prev_velocity;
   static double motor_pwm, motor_volts, motor_pwm_filter, prev_pwm,motor_v_unf;
   static uint32_t initial_millis = millis();
@@ -353,19 +355,23 @@ void mimo_control()
   error_velocity = target_velocity - motor_velocity;
 
   //Error protection
-  if (error_position > 0.3)
+  if (error_position > 0.8)
   {
-    error_position = 0.3;
+    error_position = 0.8;
   }
-  else if (error_position < -0.3)
+  else if (error_position < -0.8)
   {
-    error_position = -0.3;
+    error_position = -0.8;
   }
   
   //Motor Output
-  if(current_step < RISE_TIME)
+  if(current_step < SECOND_TIME)
   {
     motor_volts = K1 * error_position + K2 * error_velocity; //V/rad
+  }
+  else if (current_step < THIRD_TIME)
+  {
+    motor_volts = K3 * error_position + K4 * error_velocity; //V/rad
   }
   else
   {
@@ -406,19 +412,29 @@ void mimo_control()
 
 
   
-  //  Serial.print(error_position);
+  //  Serial.println(millis());
+  prx1= 100*error_position;
+  prx2 = 100*motor_angular_position;
+  prx3 = 100*target_position;
+   Serial.print(prx1);
+   Serial.print(" ");
+   Serial.print(prx2);
+   Serial.print(" ");
+   Serial.print(prx3);
+   Serial.print(" ");
+   Serial.println(motor_volts,5);
   //  Serial.print(" ");
-  //  Serial.print(motor_angular_position);
+  //  Serial.print(error_velocity);
   //  Serial.print(" ");
-  //  Serial.println(target_position);
-
-  //  Serial.print(error_position);
+  //  Serial.print(motor_velocity);
+  //  Serial.print(" ");
+  //  Serial.println(target_velocity);
   //  Serial.print(" ");
   //  Serial.print(target_position,5);
   //  Serial.print(" ");
   //  Serial.println(motor_volts,5);
 
-  // Serial.println(millis());
+  //Serial.println(millis());
   // Serial.println(target_position, 5);
   // Serial.println(error_position,5);
   // Serial.println(motor_pwm_filter);
@@ -427,9 +443,6 @@ void mimo_control()
   // Serial.println(target_velocity,5);
   
   // Serial.println(motor_velocity,5);
-  
-  
-
   // Serial.println(current_step,5);
 
   // Serial.println(error_velocity,5);

@@ -5,6 +5,7 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
+#include <SerialTransfer.h>
 
 
 // Pin definitions.
@@ -19,6 +20,7 @@
 #define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
 #define PIN_REGULADOR_TIEMPO PA2 //
 
+
 // Physical constraints.
 #define ROTARYMIN 0
 #define ROTARYMAX 200
@@ -27,11 +29,13 @@
 #define MOTOR_DZ 0 //165
 
 // Update rates.
+
 #define MOTOR_UPDATE_DELAY    10
 #define MOTOR_SPEED_DELAY     20
 #define SCREEN_UPDATE_DELAY   100
 #define BLINK_DELAY           500
 #define TARGET_UPDATE_DELAY   10
+
 
 // Parameter
 #define CAL_PWM 10
@@ -76,14 +80,12 @@
 
 // Structs and Enums
 enum direction{FORWARD, BACKWARD, BRAKE, BRAKE2};
-
-// struct MOTOR {
-
-//   bool DIR_A;
-//   bool DIR_B;
-//   bool is_;
-
-// };
+struct DATA {
+  bool blinker;
+  float humidity;
+  float temperature;
+  float heatIndex;
+} transfer_data;
 
 struct ControlVals {
   //Control encoder
@@ -96,6 +98,7 @@ uint16_t control_tiempo = 2000, control_rango = 75;
 double motor_position, motor_angular_position, motor_velocity, motor_acceleration, motor_output, motor_target, target_position, target_velocity, kp = 1150, ki = 0/*.0005*/, kd = 0;
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
+
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
 float const_vel_time_rise, const_vel_time_fall;
 float theta_dot_max_rise,theta_dot_max_fall, print_curr_step, print_m_target,print_m_vel,print_pos;
@@ -104,12 +107,15 @@ bool volatile signal;
 double pos_to_vel;
 
 
+
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 PID motor(&motor_velocity, &motor_output, &motor_target, kp, ki, kd, DIRECT); //Input, Output, and Setpoint.  Initial tuning parameters are also set here.
 //PID motor(&motor_position, &motor_output, &motor_target, kp, ki, kd, DIRECT);
 Servo myservo;
+SerialTransfer my_transfer;
+HardwareSerial Serial2(PIN_SERIAL_TRANSFER_RX, PIN_SERIAL_TRANSFER_TX);
 
 // Last known rotary position.
 // int lastPos = 0;
@@ -131,6 +137,7 @@ void encoderButtonISR() {
 // void ISR(PCINT1_vect) {
 //   encoder.tick(); // just call tick() to check the state.
 // }
+
 
 // Prototypes
 void change_control_values(ControlVals *vals);
@@ -154,16 +161,18 @@ void read_control();
 void pulse_interrupt();
 
 
-
-
 void setup()
 {
-  
+
 
   pinMode(PIN_DIR_A, OUTPUT);
   pinMode(PIN_DIR_B, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_INVERT, INPUT);
+  pinMode(PIN_POT_KP, INPUT_ANALOG);
+  pinMode(PIN_POT_RANGE, INPUT_ANALOG);
+  pinMode(PIN_POT_PERIOD, INPUT_ANALOG);
+
 
   pinMode(PIN_SERIAL, INPUT_PULLDOWN);
   pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
@@ -171,6 +180,7 @@ void setup()
 
 
   if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB0);
+
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
@@ -180,9 +190,11 @@ void setup()
   motor.SetOutputLimits(-500,500);
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
+
   // lcd.print(F("Encoder: "));
   //analogWrite(PIN_PWM, 255);
   analogWriteFrequency(1000);
+
   digitalWrite(PIN_DIR_A, LOW);
   digitalWrite(PIN_DIR_B, HIGH);
 
@@ -191,6 +203,7 @@ void setup()
 
 
   myservo.attach(PIN_PWM, 1000, 2000);
+
   // myservo.writeMicroseconds(1400);
   // delay(1000);
   // myservo.writeMicroseconds(1600);
@@ -202,14 +215,15 @@ void setup()
   theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   theta_dot_max_fall = 36/10;//DEGREES/(const_vel_time_fall+ACC_TIME);
 
+
 } 
 
 void loop() 
 {
   BlinkLED();
-  //Lecturas
 
   // if(!cal_flag) calibrate();
+
   
   
   // if(millis()>next_dir_change)
@@ -233,12 +247,16 @@ void loop()
   //   // next_dir_change = millis() + vals->control_tiempo; // TERCER POTENCIOOMETRO DE 2 A 10 SEG
   // }
 
+
+
   if(millis()>next_motor_update)
   {
+
     //motor_write(95);
     mimo_control();
     //read_control();
     //velocity_control();
+
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
@@ -258,6 +276,7 @@ void loop()
     lcd.clear();
     lcd.print("Enc:");
     // lcd.setCursor(9,0);
+
     lcd.print(encoder.getPosition());
     lcd.print(" ST:");
     lcd.print((int)print_curr_step);
@@ -268,12 +287,12 @@ void loop()
     lcd.print(motor_output);
     lcd.print("T:");
     lcd.print(print_m_target);
-    
-    
+
     next_screen_update = millis() + 500;
   }
   if (millis()>next_kp_update)
   {
+
     change_control_values(&control_vals);
     next_kp_update = millis() + 1000;
   }

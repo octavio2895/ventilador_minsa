@@ -11,7 +11,7 @@
 #define PIN_DIR_A PA4
 #define PIN_DIR_B PA5
 #define PIN_PWM PA3
-#define PIN_LIMIT_SWITCH PA8
+#define PIN_LIMIT_SWITCH PA0
 #define PIN_INVERT PB10
 #define PIN_OPEN PA0 // UPDATE kp de 0.01 - 0.25
 #define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
@@ -53,9 +53,9 @@
 #define FILTER_PWM    0
 
 #define K1            85
-#define K2            8
-#define K3            120
-#define K4            8
+#define K2            4
+#define K3            150
+#define K4            4
 #define K1_W          35
 #define K2_W          1
 //Targets times
@@ -126,8 +126,9 @@ void setup()
   pinMode(PIN_DIR_A, OUTPUT);
   pinMode(PIN_DIR_B, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(PIN_INVERT, INPUT);
-  pinMode(PIN_OPEN, INPUT_PULLUP);
+  // pinMode(PIN_INVERT, INPUT);
+  pinMode(PIN_LIMIT_SWITCH, INPUT_PULLUP);
+  // pinMode(PIN_OPEN, INPUT_PULLUP);
   pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
   pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
 
@@ -147,21 +148,21 @@ void setup()
   const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   theta_dot_max_fall = 36/10;//DEGREES/(const_vel_time_fall+ACC_TIME);
-  Serial.println("Booting Up...");
+  // Serial.println("Booting Up...");
 
 } 
 
 void loop() 
 {
-  while(!digitalRead(PIN_OPEN))
-  {
-    Serial.println("Openning...");
-    motor_write(-100);
-  }
+  // while(!digitalRead(PIN_OPEN))
+  // {
+  //   Serial.println("Openning...");
+  //   motor_write(-100);
+  // }
   BlinkLED();
   //Lecturas
 
-  // if(!cal_flag) calibrate();
+  if(!cal_flag) calibrate();
 
   if(millis()>next_motor_update)
   {
@@ -263,10 +264,12 @@ void mimo_control()
       motor_pwm_filter = -500;
     }
 
-    if(blocked_motor_protection(motor_angular_position, motor_pwm_filter))motor_write(motor_pwm_filter); //PWM
-    else motor_write(0);
+    // if(blocked_motor_protection(motor_angular_position, motor_pwm_filter))motor_write(motor_pwm_filter); //PWM
+    // else motor_write(0);
+    motor_write(motor_pwm_filter);
 
-    //  Serial.println(millis());
+    // Serial.print(millis());
+    // Serial.print(" ");
     prx1= 100*error_position;
     prx2 = 100*motor_angular_position;
     prx3 = 100*target_position;
@@ -276,15 +279,15 @@ void mimo_control()
     Serial.print(" ");
     Serial.print(prx3);
     Serial.print(" ");
-    Serial.println(motor_volts,5);
-    //  Serial.print(" ");
-    //  Serial.print(error_velocity);
-    //  Serial.print(" ");
-    //  Serial.print(motor_velocity);
-    //Serial.print(" ");
-    Serial.print(motor_pwm_filter);
+    Serial.print(motor_volts,5);
     Serial.print(" ");
-    Serial.println(target_position,5);
+    Serial.print(error_velocity*100);
+    Serial.print(" ");
+    Serial.println(motor_velocity*100);
+    //Serial.print(" ");
+    // Serial.print(motor_pwm_filter);
+    // Serial.print(" ");
+    // Serial.println(target_position,5);
     //  Serial.print(" ");
     //  Serial.println(motor_volts,5);
 
@@ -519,62 +522,62 @@ bool blocked_motor_protection(double ang_pos, double pwm)
   return true;
 }
 
-void calibrate()
-{
-  static int16_t prev_position = 0, init_position = 0;
-  static bool init = true, init_on_limit, is_inverted, is_back, driving_back;
-  static uint32_t millis_driving_back;
+// void calibrate()
+// {
+//   static int16_t prev_position = 0, init_position = 0;
+//   static bool init = true, init_on_limit, is_inverted, is_back, driving_back;
+//   static uint32_t millis_driving_back;
 
-  if(init)
-  {
-    init_on_limit = digitalRead(PIN_LIMIT_SWITCH);
-    init_position = encoder.getPosition();
-    init = false;
-  }
+//   if(init)
+//   {
+//     init_on_limit = digitalRead(PIN_LIMIT_SWITCH);
+//     init_position = encoder.getPosition();
+//     init = false;
+//   }
   
 
-  if (init_on_limit && !is_back)
-  {
-    /* If the position is going in the oposite direction, 
-    or the position is stuck withing a zone and some time has passed, and the motor is actively driving... */
-    if (((encoder.getPosition() < (prev_position-1)) || ((encoder.getPosition() < (prev_position+5)) && (millis() > millis_driving_back + 1000))) && driving_back) 
-    {
-      enc_inverted = !enc_inverted;
-      prev_position = encoder.getPosition();
-    }
-    if (encoder.getPosition() < (init_position + CAL_DRIVE_BACK_ANG) && !driving_back) 
-    {
-     motor_target = init_position + CAL_DRIVE_BACK_ANG;
-     prev_position = encoder.getPosition();
-     driving_back = true;
-     millis_driving_back = millis();
-    }
-    else if (encoder.getPosition() >= (init_position + CAL_DRIVE_BACK_ANG) && driving_back)
-    {
-      driving_back = false;
-      is_back = true;
-    }
-  }
+//   if (init_on_limit && !is_back)
+//   {
+//     /* If the position is going in the oposite direction, 
+//     or the position is stuck withing a zone and some time has passed, and the motor is actively driving... */
+//     if (((encoder.getPosition() < (prev_position-1)) || ((encoder.getPosition() < (prev_position+5)) && (millis() > millis_driving_back + 1000))) && driving_back) 
+//     {
+//       enc_inverted = !enc_inverted;
+//       prev_position = encoder.getPosition();
+//     }
+//     if (encoder.getPosition() < (init_position + CAL_DRIVE_BACK_ANG) && !driving_back) 
+//     {
+//      motor_target = init_position + CAL_DRIVE_BACK_ANG;
+//      prev_position = encoder.getPosition();
+//      driving_back = true;
+//      millis_driving_back = millis();
+//     }
+//     else if (encoder.getPosition() >= (init_position + CAL_DRIVE_BACK_ANG) && driving_back)
+//     {
+//       driving_back = false;
+//       is_back = true;
+//     }
+//   }
 
-  /* octavio se la come*/
+//   /* octavio se la come*/
 
-  else
-  {
-    if (digitalRead(PIN_LIMIT_SWITCH))
-    {
-      zero_position = encoder.getPosition();
-      cal_flag = true;
-    }
+//   else
+//   {
+//     if (digitalRead(PIN_LIMIT_SWITCH))
+//     {
+//       zero_position = encoder.getPosition();
+//       cal_flag = true;
+//     }
     
-    else
-    {
-      if (encoder.getPosition() > (prev_position+deg_to_clicks(CAL_DZ))) enc_inverted = !enc_inverted;
-      prev_position = encoder.getPosition();
-      motor_target = prev_position - CAL_DRIVE_ANG;
-    }
-  }
-  return;
-}
+//     else
+//     {
+//       if (encoder.getPosition() > (prev_position+deg_to_clicks(CAL_DZ))) enc_inverted = !enc_inverted;
+//       prev_position = encoder.getPosition();
+//       motor_target = prev_position - CAL_DRIVE_ANG;
+//     }
+//   }
+//   return;
+// }
 
 void motor_write(double pwm)
 {
@@ -612,13 +615,26 @@ void lcd_update(LcdVals *lcd_vals)
 
 void calibrate()
 {
-  while(!digitalRead(PIN_LIMIT_SWITCH))
+  lcd.clear();
+  lcd.setCursor(0,0);
+  lcd.print("Calibrating...");
+  while(digitalRead(PIN_LIMIT_SWITCH))
   {
     motor_write(-80);
+    delay(1);
   }
   motor_write(0);
-  zero_position = encoder.getPosition();
-
+  zero_position = encoder.getPosition() + 100;
+  lcd.setCursor(0,1);
+  lcd.print("Done!");
+  delay(500);
+  lcd.setCursor(0,0);
+  lcd.print("Place AMBUBAG");
+  lcd.setCursor(0,1);
+  lcd.print("between arms.");
+  delay(5000);
+  lcd.clear();
+  cal_flag = 1;
 }
 // void super_calibrate()
 // {

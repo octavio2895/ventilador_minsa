@@ -74,23 +74,40 @@
 //Control encoder
 struct ControlVals 
 {
-  double control_kp = 0.1;
-  uint16_t control_tiempo = 2000, control_rango = 75;
+  double kp;
+  double kv;
 }control_vals;
 
 struct LcdVals
 {
   int16_t encoder_pos;
 }lcd_vals;
+
+struct MotorDynamics
+{
+  int16_t lower_limit = 0;
+  int16_t upper_limit;
+  int16_t current_pos = 0;
+  double current_ang_pos = 0;
+  double target_pos;
+  double current_vel;
+  double target_vel;
+  uint16_t output_range = 256;
+  int16_t output;
+}motor_vals;
+
+struct CurveParams
+{
+  double const_vel_time_rise = RISE_TIME - 2*ACC_TIME;
+  double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
+  double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
+  double theta_dot_max_fall = 36/10;
+}curve_vals;
+
 // Global vars.
-double motor_velocity, motor_acceleration, motor_output, motor_target, kp = 1150, ki = 0/*.0005*/, kd = 0;
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
-float const_vel_time_rise, const_vel_time_fall;
-float theta_dot_max_rise,theta_dot_max_fall, print_curr_step, print_m_target,print_m_vel,print_pos;
-uint32_t volatile start_pulse, end_pulse, pulse_width;
-bool volatile signal;
 double pos_to_vel;
 
 // Global objects.
@@ -111,15 +128,19 @@ void encoderISR();
 int16_t deg_to_clicks(double deg);
 double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
-void mimo_control();
+void mimo_control(MotorDynamics*, ControlVals*);
 double get_target_position(uint32_t);
 double get_target_velocity(uint32_t);
 double deg_to_rad(double);
-void read_control();
 void pulse_interrupt();
 void lcd_update(LcdVals *lcd_vals);
 bool backlash_protection(double);
 bool blocked_motor_protection(double, double);
+void generate_curve(MotorDynamics*, CurveParams*);
+void read_motor(MotorDynamics*);
+void gain_scheduling(ControlVals *);
+void execute_motor(MotorDynamics *);
+void filter_motor(MotorDynamics *);
 
 void setup()
 {
@@ -131,8 +152,6 @@ void setup()
   // pinMode(PIN_OPEN, INPUT_PULLUP);
   pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
   pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
-
-  // if(digitalRead(PIN_INVERT)) RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB0);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
@@ -143,167 +162,157 @@ void setup()
   digitalWrite(PIN_DIR_B, HIGH);
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
-
-  const_vel_time_rise = RISE_TIME - 2*ACC_TIME;
-  const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
-  theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
-  theta_dot_max_fall = 36/10;//DEGREES/(const_vel_time_fall+ACC_TIME);
   // Serial.println("Booting Up...");
-
 } 
 
 void loop() 
 {
-  // while(!digitalRead(PIN_OPEN))
-  // {
-  //   Serial.println("Openning...");
-  //   motor_write(-100);
-  // }
   BlinkLED();
-  //Lecturas
-
   if(!cal_flag) calibrate();
 
   if(millis()>next_motor_update)
   {
-    mimo_control();
+    read_motor(&motor_vals);
+    gain_scheduling(&control_vals);
+    generate_curve(&motor_vals, &curve_vals);
+    mimo_control(&motor_vals, &control_vals);
+    filter_motor(&motor_vals);
+    execute_motor(&motor_vals);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
   if (millis()>next_screen_update) 
   {
-    lcd_vals.encoder_pos = encoder.getPosition();
+    lcd_vals.encoder_pos = encoder.getPosition() - zero_position;
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
 
-  // if (millis()>next_kp_update)
-  // {
-  //   change_control_values(&control_vals);
-  //   next_kp_update = millis() + 1000;
-  // }
-
 }
 
-void read_control()
+void generate_curve(MotorDynamics *m, CurveParams *c)
 {
-  int16_t encoder_val = encoder.getPosition();
-  static uint64_t pulse_control,i,x,y;
-  y=y+10;
-  i++;
-  x=x+5;
-  Serial.println(encoder_val);
-}
-
-void mimo_control()
-{
-  static uint32_t next_target_update = 0;
-  static double error_position, prx1,prx2,prx3;
-  static double error_velocity, prev_velocity;
-  static double target_position, target_velocity;
-  static double motor_pwm, motor_volts, motor_pwm_filter, prev_pwm,motor_v_unf;
   static uint32_t initial_millis = millis();
   uint32_t current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
-  static double motor_position, motor_angular_position;
+  m->target_pos = 1*get_target_position(current_step);
+  m->target_vel = 1*get_target_velocity(current_step);
+}
 
-  if (/*backlash_protection(target_velocity)*/ true)
+void read_motor(MotorDynamics *m)
+{
+  static double motor_angular_position, motor_v_unf, prev_velocity;
+  m->current_pos = (double) calculate_position();   //Position
+  m->current_ang_pos = clicks_to_rad(m->current_pos);
+  motor_v_unf = calculate_angular_velocity(motor_angular_position);
+  m->current_vel = (double) ((motor_v_unf + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
+  prev_velocity = m->current_vel;
+}
+
+void gain_scheduling(ControlVals *c)
+{
+  static uint32_t initial_millis = millis();
+  uint32_t current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
+
+  if(current_step < SECOND_TIME)
   {
-    //Define Target values
-    if (millis()>next_target_update)
-    {
-      target_position = 1*get_target_position(current_step);
-      target_velocity = 1*get_target_velocity(current_step);
-      next_target_update = millis() + TARGET_UPDATE_DELAY;
-    }
-    //Read Real values
-    motor_position = (double) calculate_position();   //Position
-    motor_angular_position = clicks_to_rad(motor_position);
-    motor_v_unf = calculate_angular_velocity(motor_angular_position);
-    motor_velocity = (double) ((motor_v_unf + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
-    prev_velocity = motor_velocity;
-
-    //Calculate error
-    error_position = target_position - motor_angular_position;
-    error_velocity = target_velocity - motor_velocity;
-
-    //Error protection
-    if (error_position > 0.8)
-    {
-      error_position = 0.8;
-    }
-    else if (error_position < -0.8)
-    {
-      error_position = -0.8;
-    }
-    
-    //Motor Output
-    if(current_step < SECOND_TIME)
-    {
-      motor_volts = K1 * error_position + K2 * error_velocity; //V/rad
-    }
-    else if (current_step < THIRD_TIME)
-    {
-      motor_volts = K3 * error_position + K4 * error_velocity; //V/rad
-    }
-    else
-    {
-      motor_volts = K1_W * error_position + K2_W * error_velocity;
-    }
-    
-    motor_pwm = map(motor_volts, 0, 12, 0, 500);
-    motor_pwm_filter = (motor_pwm + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
-    prev_pwm = motor_pwm_filter;
-
-    
-    if(motor_pwm_filter > 500)
-    {
-      motor_pwm_filter = 500;
-    }
-    else if (motor_pwm_filter < -500)
-    {
-      motor_pwm_filter = -500;
-    }
-
-    // if(blocked_motor_protection(motor_angular_position, motor_pwm_filter))motor_write(motor_pwm_filter); //PWM
-    // else motor_write(0);
-    motor_write(motor_pwm_filter);
-
-    // Serial.print(millis());
-    // Serial.print(" ");
-    prx1= 100*error_position;
-    prx2 = 100*motor_angular_position;
-    prx3 = 100*target_position;
-    Serial.print(prx1);
-    Serial.print(" ");
-    Serial.print(prx2);
-    Serial.print(" ");
-    Serial.print(prx3);
-    Serial.print(" ");
-    Serial.print(motor_volts,5);
-    Serial.print(" ");
-    Serial.print(error_velocity*100);
-    Serial.print(" ");
-    Serial.println(motor_velocity*100);
-    //Serial.print(" ");
-    // Serial.print(motor_pwm_filter);
-    // Serial.print(" ");
-    // Serial.println(target_position,5);
-    //  Serial.print(" ");
-    //  Serial.println(motor_volts,5);
-
-    //Serial.println(millis());
-    // Serial.println(target_position, 5);
-    // Serial.println(error_position,5);
-    // Serial.println(motor_pwm_filter);
-    // Serial.println(motor_angular_position,5);
-    // Serial.println(motor_volts);
-    // Serial.println(target_velocity,5);
-    
-    // Serial.println(motor_velocity,5);
-    // Serial.println(current_step,5);
-
-    // Serial.println(error_velocity,5);
+    c->kp = K1;
+    c->kv = K2;
   }
+  else if (current_step < THIRD_TIME)
+  {
+    c->kp = K3; 
+    c->kv = K4;
+  }
+  else
+  {
+    c->kp = K1_W;
+    c->kv = K2_W;
+  }
+
+}
+
+void filter_motor(MotorDynamics *m)
+{
+  static double prev_pwm;
+  m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
+  prev_pwm = m->output;
+
+  
+  if(m->output > 500)
+  {
+    m->output = 500;
+  }
+  else if (m->output < -500)
+  {
+    m->output = -500;
+  }
+
+}
+
+void execute_motor(MotorDynamics *m)
+{
+  motor_write(m->output);
+}
+
+void mimo_control(MotorDynamics *m, ControlVals *c)
+{
+  static double error_position, prx1,prx2,prx3;
+  static double error_velocity;
+  static double motor_volts;
+
+  //Calculate error
+  error_position = m->target_pos - m->current_ang_pos;
+  error_velocity = m->target_vel - m->current_vel;
+
+  //Error protection
+  if (error_position > 0.8)
+  {
+    error_position = 0.8;
+  }
+  else if (error_position < -0.8)
+  {
+    error_position = -0.8;
+  }
+
+  motor_volts = c->kp * error_position + c->kv * error_velocity;
+  m->output = map(motor_volts, 0, 12, 0, 500);
+
+
+  // Serial.print(millis());
+  // Serial.print(" ");
+  prx1= 100*error_position;
+  prx2 = 100*m->current_ang_pos;
+  prx3 = 100*m->target_pos;
+  Serial.print(prx1);
+  Serial.print(" ");
+  Serial.print(prx2);
+  Serial.print(" ");
+  Serial.print(prx3);
+  Serial.print(" ");
+  Serial.print(motor_volts,5);
+  Serial.print(" ");
+  Serial.print(error_velocity*100);
+  Serial.print(" ");
+  Serial.println(m->current_vel*100);
+  //Serial.print(" ");
+  // Serial.print(motor_pwm_filter);
+  // Serial.print(" ");
+  // Serial.println(target_position,5);
+  //  Serial.print(" ");
+  //  Serial.println(motor_volts,5);
+
+  //Serial.println(millis());
+  // Serial.println(target_position, 5);
+  // Serial.println(error_position,5);
+  // Serial.println(motor_pwm_filter);
+  // Serial.println(motor_angular_position,5);
+  // Serial.println(motor_volts);
+  // Serial.println(target_velocity,5);
+  
+  // Serial.println(motor_velocity,5);
+  // Serial.println(current_step,5);
+
+  // Serial.println(error_velocity,5);
 }
 
 double get_target_position(uint32_t current_step)

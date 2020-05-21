@@ -25,6 +25,10 @@
 #define MOTOR_DZ 0 //165
 #define BACKLASH_CLICKS 5
 #define PROTECTION_CLICKS 5
+#define ACCEL_1 0.23
+#define ACCEL_2 -0.02
+#define ACCEL_3 -0.14
+#define ACCEL_4 0.23
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -102,9 +106,37 @@ struct CurveParams
   double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   double theta_dot_max_fall = 36/10;
+  double accel_1 = 0.23;
+  double accel_2 = -1.746e-5;
+  double accel_3 = -.02;
+  double accel_4 = 0.23;
+  double v_1 = 0.14428637;
+  double v_2 = 0.13488079;
+  double v_3 = 0;
+  double v_4 = 0;
+  double v_5 = -0.14428637;
+  double v_6 = 0;
+  double v_7 = 0;
+  uint32_t t_1 = 515;
+  uint32_t t_2 = 1034;
+  uint32_t t_3 = 2000;
+  uint32_t t_4 = 3000;
+  uint32_t t_5 = 4117;
+  uint32_t t_6 = 5234;
+  uint32_t t_7 = 6000;
 }curve_vals;
 
 // Global vars.
+double plus_c[]
+{
+  0,
+  0.5*(curve_vals.v_1 * ((double)(curve_vals.t_1)/1000)),
+  plus_c[1] + (0.5*(double)(curve_vals.v_2 + curve_vals.v_1)*((double)(curve_vals.t_2 - curve_vals.t_1)/1000)),
+  plus_c[2] + (0.5*(double)(curve_vals.v_3 + curve_vals.v_2)*((double)(curve_vals.t_3 - curve_vals.t_2)/1000)),
+  plus_c[3] + (0.5*(double)(curve_vals.v_4 + curve_vals.v_3)*((double)(curve_vals.t_4 - curve_vals.t_3)/1000)),
+  plus_c[4] + (0.5*(double)(curve_vals.v_5 + curve_vals.v_4)*((double)(curve_vals.t_5 - curve_vals.t_4)/1000)),
+  plus_c[5] + (0.5*(double)(curve_vals.v_6 + curve_vals.v_5)*((double)(curve_vals.t_6 - curve_vals.t_5)/1000))
+};
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
@@ -129,8 +161,8 @@ int16_t deg_to_clicks(double deg);
 double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void mimo_control(MotorDynamics*, ControlVals*);
-double get_target_position(uint32_t);
-double get_target_velocity(uint32_t);
+double get_target_position(uint32_t, CurveParams*);
+double get_target_velocity(uint32_t, CurveParams*);
 double deg_to_rad(double);
 void pulse_interrupt();
 void lcd_update(LcdVals *lcd_vals);
@@ -163,12 +195,20 @@ void setup()
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
   // Serial.println("Booting Up...");
+  Serial.println(plus_c[0],5);
+  Serial.println(plus_c[1],5);
+  Serial.println(plus_c[2],5);
+  Serial.println(plus_c[3],5);
+  Serial.println(plus_c[4],5);
+  Serial.println(plus_c[5],5);
+  Serial.println(plus_c[6],5);
+  delay(10000);
 } 
 
 void loop() 
 {
   BlinkLED();
-  if(!cal_flag) calibrate();
+  // if(!cal_flag) calibrate();
 
   if(millis()>next_motor_update)
   {
@@ -187,15 +227,19 @@ void loop()
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
-
 }
-
 void generate_curve(MotorDynamics *m, CurveParams *c)
 {
   static uint32_t initial_millis = millis();
-  uint32_t current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
-  m->target_pos = 1*get_target_position(current_step);
-  m->target_vel = 1*get_target_velocity(current_step);
+  if(millis()-initial_millis >= 6000) initial_millis = millis();
+  uint32_t current_step = (millis()-initial_millis);
+  m->target_vel = get_target_velocity(current_step, c);
+  m->target_pos = get_target_position(current_step, c);
+  // Serial.print(current_step);
+  // Serial.print(" ");
+  Serial.print(m->target_vel*10);
+  Serial.print(" ");
+  Serial.println(m->target_pos*10);
 }
 
 void read_motor(MotorDynamics *m)
@@ -236,7 +280,6 @@ void filter_motor(MotorDynamics *m)
   static double prev_pwm;
   m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
   prev_pwm = m->output;
-
   
   if(m->output > 500)
   {
@@ -280,20 +323,20 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
 
   // Serial.print(millis());
   // Serial.print(" ");
-  prx1= 100*error_position;
-  prx2 = 100*m->current_ang_pos;
-  prx3 = 100*m->target_pos;
-  Serial.print(prx1);
-  Serial.print(" ");
-  Serial.print(prx2);
-  Serial.print(" ");
-  Serial.print(prx3);
-  Serial.print(" ");
-  Serial.print(motor_volts,5);
-  Serial.print(" ");
-  Serial.print(error_velocity*100);
-  Serial.print(" ");
-  Serial.println(m->current_vel*100);
+  // prx1= 100*error_position;
+  // prx2 = 100*m->current_ang_pos;
+  // prx3 = 100*m->target_pos;
+  // Serial.print(prx1);
+  // Serial.print(" ");
+  // Serial.print(prx2);
+  // Serial.print(" ");
+  // Serial.print(prx3);
+  // Serial.print(" ");
+  // Serial.print(motor_volts,5);
+  // Serial.print(" ");
+  // Serial.print(error_velocity*100);
+  // Serial.print(" ");
+  // Serial.println(m->current_vel*100);
   //Serial.print(" ");
   // Serial.print(motor_pwm_filter);
   // Serial.print(" ");
@@ -315,68 +358,102 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
   // Serial.println(error_velocity,5);
 }
 
-double get_target_position(uint32_t current_step)
-{
-  static double target_pos;
-  static bool init1 = 1, init2 = 1, init3 = 1;
-  static double last_target;
+// double get_target_position(uint32_t current_step, double vel)
+// {
+//   static double target_pos;
+//   static uint32_t prev_step = 0;
+//   static double prev_vel = 0;
+//   static double prev_pos = 0;
+//   target_pos = prev_pos + 0.5*(vel + prev_vel)*((double)(current_step-prev_step)/1000);
+//   prev_pos = target_pos;
+//   prev_step = current_step;
+//   prev_vel = vel;
+//   // else
+//   // {
+//   //   target_vel = 0;
+//   //   return target_vel;
+//   // }
+//   return target_pos;
+// }
 
-  if(current_step <= FIRST_TIME)
+double get_target_position(uint32_t current_step, CurveParams *c)
+{
+  double target_pos;
+  if(current_step <= c->t_1)
   {
-    init1 = 1;
-    init2 = 1;
-    init3 = 1;
-    target_pos = (0.5*(current_step*current_step)/1000)*((deg_to_rad(DEG_P_SEG))/FIRST_TIME);
+    target_pos = 0.5*(c->v_1/((double)c->t_1))*((double)(current_step*current_step/1000)) + plus_c[0];
+    return target_pos;
   }
-  else if (current_step <= SECOND_TIME)
+  else if (current_step <= c->t_2)
   {
-    if(init1)
-    {
-      last_target = target_pos;
-      init1 = 0;
-    }
-    target_pos = deg_to_rad(DEG_P_SEG) * (current_step-FIRST_TIME)/1000 + last_target; 
+    target_pos = 0.5*((c->v_2 + c->v_1)/((double)(c->t_2 - c->t_1)/1000))*((double)(current_step - c->t_1)/1000)*((double)(current_step - c->t_1)/1000) + plus_c[1];
+    return target_pos;
   }
-  else if (current_step <= THIRD_TIME)
+  else if (current_step <= c->t_3)
   {
-    if(init2)
-    {
-      last_target = target_pos;
-      init2 = 0;
-    }   
-    target_pos = ((deg_to_rad(-DEG_P_SEG))/(THIRD_TIME-SECOND_TIME))*(0.5*(current_step-SECOND_TIME)*(current_step-SECOND_TIME)/1000-SECOND_TIME*(current_step-SECOND_TIME)/1000)+ deg_to_rad(DEG_P_SEG)*(current_step-SECOND_TIME)/1000 + last_target;
+    target_pos = 0.5*((c->v_3 + c->v_2)/((double)(c->t_3 - c->t_2)/1000))*((double)(current_step - c->t_2)/1000)*((double)(current_step - c->t_2)/1000) + plus_c[2];
+    return target_pos;
+  }
+  else if (current_step <= c->t_4)
+  {
+    target_pos = 0.5*((c->v_4 + c->v_3)/((double)(c->t_4 - c->t_3)/1000))*((double)(current_step - c->t_3)/1000)*((double)(current_step - c->t_3)/1000) + plus_c[3];
+    return target_pos;
+  }
+  else if (current_step <= c->t_5)
+  {
+    target_pos = 0.5*((c->v_5 + c->v_4)/((double)(c->t_5 - c->t_4)/1000))*((double)(current_step - c->t_4)/1000)*((double)(current_step - c->t_4)/1000) + plus_c[4];
+    return target_pos;
+  }
+  else if (current_step <= c->t_6)
+  {
+    target_pos = 0.5*((c->v_6 + c->v_5)/((double)(c->t_6 - c->t_5)/1000))*((double)(current_step - c->t_5)/1000)*((double)(current_step - c->t_5)/1000) + plus_c[5];
+    return target_pos;
   }
   else
   {
-    if(init3)
-    {
-      last_target = target_pos;
-      pos_to_vel = last_target;
-      init3 = 0;
-    }   
-    target_pos = (-last_target/WAITING_TIME)*(current_step-THIRD_TIME)+last_target;
+    target_pos = 0.5*((c->v_7 + c->v_6)/((double)(c->t_7 - c->t_6)/1000))*((double)(current_step - c->t_6)/1000)*((double)(current_step - c->t_6)/1000) + plus_c[6];
+    return target_pos;
   }
   return target_pos;
 }
 
-double get_target_velocity(uint32_t current_step)
+double get_target_velocity(uint32_t current_step, CurveParams *c)
 {
-  double target_vel;
-  if(current_step <= FIRST_TIME)
+  static double target_vel;
+  if(current_step <= c->t_1)
   {
-    target_vel = current_step*(deg_to_rad(DEG_P_SEG))/FIRST_TIME;
+    target_vel = (c->v_1/((double)c->t_1))*((double)current_step);
+    return target_vel;
   }
-  else if (current_step > FIRST_TIME && current_step <= SECOND_TIME)
+  else if (current_step <= c->t_2)
   {
-    target_vel = deg_to_rad(DEG_P_SEG);
+    target_vel = c->v_1 + ((c->v_2 - c->v_1)/((double)(c->t_2 - c->t_1)))*((double)current_step - c->t_1);
+    return target_vel;
   }
-  else if (current_step > SECOND_TIME && current_step <= THIRD_TIME)
+  else if (current_step <= c->t_3)
   {
-    target_vel = ((deg_to_rad(-DEG_P_SEG))/(THIRD_TIME-SECOND_TIME))*(current_step-SECOND_TIME) + deg_to_rad(DEG_P_SEG);
+    target_vel = c->v_2 + ((c->v_3 - c->v_2)/((double)(c->t_3 - c->t_2)))*((double)current_step - c->t_2);
+    return target_vel;
+  }
+  else if (current_step <= c->t_4)
+  {
+    target_vel = 0;
+    return target_vel;
+  }
+  else if (current_step <= c->t_5)
+  {
+    target_vel = c->v_4 + ((c->v_5 - c->v_4)/(c->t_5 - c->t_4))*((double)current_step - c->t_4);
+    return target_vel;
+  }
+  else if (current_step <= c->t_6)
+  {
+    target_vel = c->v_5 + ((c->v_6 - c->v_5)/(c->t_6 - c->t_5))*((double)current_step  - c->t_5);
+    return target_vel;
   }
   else
   {
-    target_vel = (-pos_to_vel/WAITING_TIME);
+    target_vel = 0;
+    return target_vel;
   }
   return target_vel;
 }
@@ -530,63 +607,6 @@ bool blocked_motor_protection(double ang_pos, double pwm)
   }
   return true;
 }
-
-// void calibrate()
-// {
-//   static int16_t prev_position = 0, init_position = 0;
-//   static bool init = true, init_on_limit, is_inverted, is_back, driving_back;
-//   static uint32_t millis_driving_back;
-
-//   if(init)
-//   {
-//     init_on_limit = digitalRead(PIN_LIMIT_SWITCH);
-//     init_position = encoder.getPosition();
-//     init = false;
-//   }
-  
-
-//   if (init_on_limit && !is_back)
-//   {
-//     /* If the position is going in the oposite direction, 
-//     or the position is stuck withing a zone and some time has passed, and the motor is actively driving... */
-//     if (((encoder.getPosition() < (prev_position-1)) || ((encoder.getPosition() < (prev_position+5)) && (millis() > millis_driving_back + 1000))) && driving_back) 
-//     {
-//       enc_inverted = !enc_inverted;
-//       prev_position = encoder.getPosition();
-//     }
-//     if (encoder.getPosition() < (init_position + CAL_DRIVE_BACK_ANG) && !driving_back) 
-//     {
-//      motor_target = init_position + CAL_DRIVE_BACK_ANG;
-//      prev_position = encoder.getPosition();
-//      driving_back = true;
-//      millis_driving_back = millis();
-//     }
-//     else if (encoder.getPosition() >= (init_position + CAL_DRIVE_BACK_ANG) && driving_back)
-//     {
-//       driving_back = false;
-//       is_back = true;
-//     }
-//   }
-
-//   /* octavio se la come*/
-
-//   else
-//   {
-//     if (digitalRead(PIN_LIMIT_SWITCH))
-//     {
-//       zero_position = encoder.getPosition();
-//       cal_flag = true;
-//     }
-    
-//     else
-//     {
-//       if (encoder.getPosition() > (prev_position+deg_to_clicks(CAL_DZ))) enc_inverted = !enc_inverted;
-//       prev_position = encoder.getPosition();
-//       motor_target = prev_position - CAL_DRIVE_ANG;
-//     }
-//   }
-//   return;
-// }
 
 void motor_write(double pwm)
 {

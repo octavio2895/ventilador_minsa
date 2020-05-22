@@ -3,6 +3,7 @@
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
+#include <math.h>
 
 
 // Pin definitions.
@@ -25,9 +26,9 @@
 #define MOTOR_DZ 0 //165
 #define BACKLASH_CLICKS 5
 #define PROTECTION_CLICKS 5
-#define ACCEL_1 0.23
-#define ACCEL_2 -0.02
-#define ACCEL_3 -0.14
+#define ACCEL_1 16
+#define ACCEL_2 -1
+#define ACCEL_3 -8
 #define ACCEL_4 0.23
 
 // Update rates.
@@ -36,6 +37,7 @@
 #define SCREEN_UPDATE_DELAY   100
 #define BLINK_DELAY           500
 #define TARGET_UPDATE_DELAY   10
+#define PARAMS_UPDATE_DELAY   100
 
 // Parameter
 #define CAL_PWM 10
@@ -74,6 +76,7 @@
 
 //Target deg/s
 #define DEG_P_SEG     8
+#define DEG_TO_RAD    PI/180
 
 //Control encoder
 struct ControlVals 
@@ -106,40 +109,61 @@ struct CurveParams
   double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   double theta_dot_max_fall = 36/10;
-  double accel_1 = 0.23;
-  double accel_2 = -1.746e-5;
-  double accel_3 = -.02;
-  double accel_4 = 0.23;
-  double v_1 = 0.14428637;
-  double v_2 = 0.13488079;
-  double v_3 = 0;
-  double v_4 = 0;
-  double v_5 = -0.14428637;
-  double v_6 = 0;
-  double v_7 = 0;
-  uint32_t t_1 = 515;
-  uint32_t t_2 = 1034;
-  uint32_t t_3 = 2000;
-  uint32_t t_4 = 3000;
-  uint32_t t_5 = 4117;
-  uint32_t t_6 = 5234;
-  uint32_t t_7 = 6000;
-}curve_vals;
+  uint32_t t_d = 2000;
+  double a_t = 10;
+  uint32_t t_f = 6000;
+
+  double accel[3] = 
+  {
+    ACCEL_1,
+    ACCEL_2,
+    ACCEL_3
+  };
+
+  // double v[7] = 
+  // {
+  //   0.14428637,
+  //   0.13488079,
+  //   0,
+  //   0,
+  //   -0.14428637,
+  //   0,
+  //   0
+  // };
+
+  // uint32_t t[7] = 
+  // {
+  //   515,
+  //   1034,
+  //   2000,
+  //   3000,
+  //   4117,
+  //   5234,
+  //   6000
+  // };
+
+  double v[7];
+  uint32_t t[7];
+  double plus_c[7];
+
+  // double plus_c[7] =
+  // {
+  //   0,
+  //   0.5*(v[0] * ((double)(t[0])/1000)),
+  //   plus_c[1] + (0.5*(double)(v[1] + v[0])*((double)(t[1] - t[0])/1000)),
+  //   plus_c[2] + (0.5*(double)(v[2] + v[1])*((double)(t[2] - t[1])/1000)),
+  //   plus_c[3] + (0.5*(double)(v[3] + v[2])*((double)(t[3] - t[2])/1000)),
+  //   plus_c[4] + (0.5*(double)(v[4] + v[3])*((double)(t[4] - t[3])/1000)),
+  //   plus_c[5] + (0.5*(double)(v[5] + v[4])*((double)(t[5] - t[4])/1000))
+  // };
+
+}curve_vals, new_vals;
 
 // Global vars.
-double plus_c[]
-{
-  0,
-  0.5*(curve_vals.v_1 * ((double)(curve_vals.t_1)/1000)),
-  plus_c[1] + (0.5*(double)(curve_vals.v_2 + curve_vals.v_1)*((double)(curve_vals.t_2 - curve_vals.t_1)/1000)),
-  plus_c[2] + (0.5*(double)(curve_vals.v_3 + curve_vals.v_2)*((double)(curve_vals.t_3 - curve_vals.t_2)/1000)),
-  plus_c[3] + (0.5*(double)(curve_vals.v_4 + curve_vals.v_3)*((double)(curve_vals.t_4 - curve_vals.t_3)/1000)),
-  plus_c[4] + (0.5*(double)(curve_vals.v_5 + curve_vals.v_4)*((double)(curve_vals.t_5 - curve_vals.t_4)/1000)),
-  plus_c[5] + (0.5*(double)(curve_vals.v_6 + curve_vals.v_5)*((double)(curve_vals.t_6 - curve_vals.t_5)/1000))
-};
+
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_kp_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update;
 double pos_to_vel;
 
 // Global objects.
@@ -173,6 +197,9 @@ void read_motor(MotorDynamics*);
 void gain_scheduling(ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
+void read_params(CurveParams *);
+void update_params(CurveParams *, CurveParams *);
+
 
 void setup()
 {
@@ -195,20 +222,27 @@ void setup()
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
   // Serial.println("Booting Up...");
-  Serial.println(plus_c[0],5);
-  Serial.println(plus_c[1],5);
-  Serial.println(plus_c[2],5);
-  Serial.println(plus_c[3],5);
-  Serial.println(plus_c[4],5);
-  Serial.println(plus_c[5],5);
-  Serial.println(plus_c[6],5);
-  delay(10000);
+  // Serial.println(plus_c[0],5);
+  // Serial.println(plus_c[1],5);
+  // Serial.println(plus_c[2],5);
+  // Serial.println(plus_c[3],5);
+  // Serial.println(plus_c[4],5);
+  // Serial.println(plus_c[5],5);
+  // Serial.println(plus_c[6],5);
+  // delay(10000);
 } 
 
 void loop() 
 {
   BlinkLED();
-  // if(!cal_flag) calibrate();
+  if(!cal_flag) calibrate();
+
+  if(millis()>next_params_update)
+  {
+    read_params(&new_vals);
+    update_params(&curve_vals, &new_vals);
+    next_params_update = millis() + PARAMS_UPDATE_DELAY;
+  }
 
   if(millis()>next_motor_update)
   {
@@ -227,6 +261,65 @@ void loop()
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
+}
+
+void update_params(CurveParams *c, CurveParams *n)
+{
+  static bool init;
+  if(!init)
+  {
+    // c->t[0] = ((-(sqrt(-1*(2*c->a_t*(c->accel[0]-c->accel[2]) + (c->accel[0]*c->accel[2]*((double)c->t_d/1000)*((double)c->t_d/1000)))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2])))+((c->accel[0]- c->accel[1])*c->accel[2]*((double)c->t_d/1000))) / ((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1])))*1000;
+    // c->t[0] = ((-sqrt(-(2*c->a_t*(c->accel[0]-c->accel[2])+c->accel[0]*c->accel[2]*((double)(c->t_d)/1000)* (double)(c->t_d)/1000))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2]))+(c->accel[0]-c->accel[1])*c->accel[2]* ((double)(c->t_d)/1000))/((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1]))*1000;
+    //c->t[0] = (((-sqrt (- (2*c->a_t* (c->accel[0]-c->accel[2] )+c->accel[0]*c->accel[2]*  (double)c->t_d /1000  *  (double)c->t_d /1000    )* (c->accel[0]-c->accel[1] )* (c->accel[1]-c->accel[2] ))+ (c->accel[0]-c->accel[1] )*c->accel[2]*  (double)c->t_d /1000 ))/(((c->accel[0]-c->accel[2] )* (c->accel[0]-c->accel[1] )) ))*1000;
+    c->t[0] = 515;
+    c->v[0] = (c->accel[0] * ((double)c->t[0]/1000))*DEG_TO_RAD;
+    c->t[1] = (((double)c->t[0]/1000) * ((c->accel[1]-c->accel[0])/(c->accel[1]-c->accel[2])) - (((double)c->t_d/1000)*((c->accel[2])/(c->accel[1]-c->accel[2]))))*1000;
+    c->v[1] = (-c->accel[2]*(((double)c->t_d-(double)c->t[1])/1000))*DEG_TO_RAD;
+    c->t[2] = c->t_d;
+    c->v[2] = 0;
+    c->v[3] = 0;
+    c->t[3] = c->t[2] + 1000;
+    c->t[4] = c->t[3] + (sqrt((c->a_t)/(c->accel[0]))*1000);
+    c->v[4] = -c->accel[0]*((double)(c->t[4]-c->t[3])/1000) * DEG_TO_RAD;
+    c->v[5] = 0;
+    c->t[5] = (2*c->t[4]) - c->t[3];
+    c->t[6] = c->t_f;
+    c->v[6] = 0;
+    c->plus_c[0] = 0;
+    c->plus_c[1] = 0.5*(c->v[0] * ((double)(c->t[0])/1000));
+    c->plus_c[2] = c->plus_c[1] + (0.5*(double)(c->v[1] + c->v[0])*((double)(c->t[1] - c->t[0])/1000));
+    c->plus_c[3] = c->plus_c[2] + (0.5*(double)(c->v[2] + c->v[1])*((double)(c->t[2] - c->t[1])/1000));
+    c->plus_c[4] = c->plus_c[3] + (0.5*(double)(c->v[3] + c->v[2])*((double)(c->t[3] - c->t[2])/1000));
+    c->plus_c[5] = c->plus_c[4] + (0.5*(double)(c->v[4] + c->v[3])*((double)(c->t[4] - c->t[3])/1000));
+    c->plus_c[6] = c->plus_c[5] + (0.5*(double)(c->v[5] + c->v[4])*((double)(c->t[5] - c->t[4])/1000));
+    for(int i=0; i<7; i++)
+    {
+      Serial.print(c->t[i]);
+      Serial.print(" ");
+    }
+    Serial.println();
+    for(int i=0; i<7; i++)
+    {
+      Serial.print(c->v[i], 4);
+      Serial.print(" ");
+    }
+    Serial.println();
+    for(int i=0; i<7; i++)
+    {
+      Serial.print(c->plus_c[i], 4);
+      Serial.print(" ");
+    }
+    Serial.println();
+    delay(1000);
+
+    init = 1;
+  }
+  return;
+}
+
+void read_params(CurveParams *c)
+{
+  return;
 }
 void generate_curve(MotorDynamics *m, CurveParams *c)
 {
@@ -379,39 +472,39 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
 double get_target_position(uint32_t current_step, CurveParams *c)
 {
   double target_pos;
-  if(current_step <= c->t_1)
+  if(current_step <= c->t[0])
   {
-    target_pos = 0.5*(c->v_1/((double)c->t_1))*((double)(current_step*current_step/1000)) + plus_c[0];
+    target_pos = 0.5*(c->v[0]/((double)c->t[0]))*((double)(current_step*current_step/1000)) + c->plus_c[0];
     return target_pos;
   }
-  else if (current_step <= c->t_2)
+  else if (current_step <= c->t[1])
   {
-    target_pos = 0.5*((c->v_2 + c->v_1)/((double)(c->t_2 - c->t_1)/1000))*((double)(current_step - c->t_1)/1000)*((double)(current_step - c->t_1)/1000) + plus_c[1];
+    target_pos = 0.5*((c->v[1] + c->v[0])/((double)(c->t[1] - c->t[0])/1000))*((double)(current_step - c->t[0])/1000)*((double)(current_step - c->t[0])/1000) + c->plus_c[1];
     return target_pos;
   }
-  else if (current_step <= c->t_3)
+  else if (current_step <= c->t[2])
   {
-    target_pos = 0.5*((c->v_3 + c->v_2)/((double)(c->t_3 - c->t_2)/1000))*((double)(current_step - c->t_2)/1000)*((double)(current_step - c->t_2)/1000) + plus_c[2];
+    target_pos = 0.5*((c->v[2] + c->v[1])/((double)(c->t[2] - c->t[1])/1000))*((double)(current_step - c->t[1])/1000)*((double)(current_step - c->t[1])/1000) + c->plus_c[2];
     return target_pos;
   }
-  else if (current_step <= c->t_4)
+  else if (current_step <= c->t[3])
   {
-    target_pos = 0.5*((c->v_4 + c->v_3)/((double)(c->t_4 - c->t_3)/1000))*((double)(current_step - c->t_3)/1000)*((double)(current_step - c->t_3)/1000) + plus_c[3];
+    target_pos = 0.5*((c->v[3] + c->v[2])/((double)(c->t[3] - c->t[2])/1000))*((double)(current_step - c->t[2])/1000)*((double)(current_step - c->t[2])/1000) + c->plus_c[3];
     return target_pos;
   }
-  else if (current_step <= c->t_5)
+  else if (current_step <= c->t[4])
   {
-    target_pos = 0.5*((c->v_5 + c->v_4)/((double)(c->t_5 - c->t_4)/1000))*((double)(current_step - c->t_4)/1000)*((double)(current_step - c->t_4)/1000) + plus_c[4];
+    target_pos = 0.5*((c->v[4] + c->v[3])/((double)(c->t[4] - c->t[3])/1000))*((double)(current_step - c->t[3])/1000)*((double)(current_step - c->t[3])/1000) + c->plus_c[4];
     return target_pos;
   }
-  else if (current_step <= c->t_6)
+  else if (current_step <= c->t[5])
   {
-    target_pos = 0.5*((c->v_6 + c->v_5)/((double)(c->t_6 - c->t_5)/1000))*((double)(current_step - c->t_5)/1000)*((double)(current_step - c->t_5)/1000) + plus_c[5];
+    target_pos = 0.5*((c->v[5] + c->v[4])/((double)(c->t[5] - c->t[4])/1000))*((double)(current_step - c->t[4])/1000)*((double)(current_step - c->t[4])/1000) + c->plus_c[5];
     return target_pos;
   }
   else
   {
-    target_pos = 0.5*((c->v_7 + c->v_6)/((double)(c->t_7 - c->t_6)/1000))*((double)(current_step - c->t_6)/1000)*((double)(current_step - c->t_6)/1000) + plus_c[6];
+    target_pos = 0.5*((c->v[6] + c->v[5])/((double)(c->t[6] - c->t[5])/1000))*((double)(current_step - c->t[5])/1000)*((double)(current_step - c->t[5])/1000) + c->plus_c[6];
     return target_pos;
   }
   return target_pos;
@@ -420,34 +513,34 @@ double get_target_position(uint32_t current_step, CurveParams *c)
 double get_target_velocity(uint32_t current_step, CurveParams *c)
 {
   static double target_vel;
-  if(current_step <= c->t_1)
+  if(current_step <= c->t[0])
   {
-    target_vel = (c->v_1/((double)c->t_1))*((double)current_step);
+    target_vel = (c->v[0]/((double)c->t[0]))*((double)current_step);
     return target_vel;
   }
-  else if (current_step <= c->t_2)
+  else if (current_step <= c->t[1])
   {
-    target_vel = c->v_1 + ((c->v_2 - c->v_1)/((double)(c->t_2 - c->t_1)))*((double)current_step - c->t_1);
+    target_vel = c->v[0] + ((c->v[1] - c->v[0])/((double)(c->t[1] - c->t[0])))*((double)current_step - c->t[0]);
     return target_vel;
   }
-  else if (current_step <= c->t_3)
+  else if (current_step <= c->t[2])
   {
-    target_vel = c->v_2 + ((c->v_3 - c->v_2)/((double)(c->t_3 - c->t_2)))*((double)current_step - c->t_2);
+    target_vel = c->v[1] + ((c->v[2] - c->v[1])/((double)(c->t[2] - c->t[1])))*((double)current_step - c->t[1]);
     return target_vel;
   }
-  else if (current_step <= c->t_4)
+  else if (current_step <= c->t[3])
   {
     target_vel = 0;
     return target_vel;
   }
-  else if (current_step <= c->t_5)
+  else if (current_step <= c->t[4])
   {
-    target_vel = c->v_4 + ((c->v_5 - c->v_4)/(c->t_5 - c->t_4))*((double)current_step - c->t_4);
+    target_vel = c->v[3] + ((c->v[4] - c->v[3])/(c->t[4] - c->t[3]))*((double)current_step - c->t[3]);
     return target_vel;
   }
-  else if (current_step <= c->t_6)
+  else if (current_step <= c->t[5])
   {
-    target_vel = c->v_5 + ((c->v_6 - c->v_5)/(c->t_6 - c->t_5))*((double)current_step  - c->t_5);
+    target_vel = c->v[4] + ((c->v[5] - c->v[4])/(c->t[5] - c->t[4]))*((double)current_step  - c->t[4]);
     return target_vel;
   }
   else

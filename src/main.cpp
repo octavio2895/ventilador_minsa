@@ -235,7 +235,7 @@ void setup()
 void loop() 
 {
   BlinkLED();
-  if(!cal_flag) calibrate();
+  // if(!cal_flag) calibrate();
 
   if(millis()>next_params_update)
   {
@@ -266,12 +266,13 @@ void loop()
 void update_params(CurveParams *c, CurveParams *n)
 {
   static bool init;
+  double sq, den, plus;
   if(!init)
   {
-    // c->t[0] = ((-(sqrt(-1*(2*c->a_t*(c->accel[0]-c->accel[2]) + (c->accel[0]*c->accel[2]*((double)c->t_d/1000)*((double)c->t_d/1000)))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2])))+((c->accel[0]- c->accel[1])*c->accel[2]*((double)c->t_d/1000))) / ((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1])))*1000;
-    // c->t[0] = ((-sqrt(-(2*c->a_t*(c->accel[0]-c->accel[2])+c->accel[0]*c->accel[2]*((double)(c->t_d)/1000)* (double)(c->t_d)/1000))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2]))+(c->accel[0]-c->accel[1])*c->accel[2]* ((double)(c->t_d)/1000))/((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1]))*1000;
-    //c->t[0] = (((-sqrt (- (2*c->a_t* (c->accel[0]-c->accel[2] )+c->accel[0]*c->accel[2]*  (double)c->t_d /1000  *  (double)c->t_d /1000    )* (c->accel[0]-c->accel[1] )* (c->accel[1]-c->accel[2] ))+ (c->accel[0]-c->accel[1] )*c->accel[2]*  (double)c->t_d /1000 ))/(((c->accel[0]-c->accel[2] )* (c->accel[0]-c->accel[1] )) ))*1000;
-    c->t[0] = 515;
+    sq = sqrt(-1*(2*c->a_t*(c->accel[0]-c->accel[2]) + (c->accel[0]*c->accel[2]*((double)c->t_d/1000)*((double)c->t_d/1000)))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2]));
+    den = ((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1]));
+    plus = ((c->accel[0]- c->accel[1])*c->accel[2]*((double)c->t_d/1000));
+    c->t[0] = (-1*(sq + plus) / den )*1000;
     c->v[0] = (c->accel[0] * ((double)c->t[0]/1000))*DEG_TO_RAD;
     c->t[1] = (((double)c->t[0]/1000) * ((c->accel[1]-c->accel[0])/(c->accel[1]-c->accel[2])) - (((double)c->t_d/1000)*((c->accel[2])/(c->accel[1]-c->accel[2]))))*1000;
     c->v[1] = (-c->accel[2]*(((double)c->t_d-(double)c->t[1])/1000))*DEG_TO_RAD;

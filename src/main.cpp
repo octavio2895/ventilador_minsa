@@ -78,6 +78,7 @@
 //Target deg/s
 #define DEG_P_SEG     8
 #define DEG_TO_RAD    PI/180
+#define CLICKS_TO_RAD (2*PI/ENCODER_CPR)
 
 //Control encoder
 struct ControlVals 
@@ -102,6 +103,8 @@ struct MotorDynamics
   double target_vel;
   uint16_t output_range = 256;
   int16_t output;
+  volatile uint32_t click_time = 1; // Avoid div 0
+  volatile bool click_dir;
 }motor_vals;
 
 struct CurveParams
@@ -178,7 +181,7 @@ void calibrate();
 void motor_set_dir(double);
 void motor_write(double);
 int16_t calculate_position();
-double calculate_angular_velocity(double);
+double calculate_angular_velocity(MotorDynamics *);
 int16_t calculate_angular_acceleration(double);
 void encoderISR();
 int16_t deg_to_clicks(double deg);
@@ -263,15 +266,15 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
   Serial.print(s->cur_step);
   Serial.print(" ");
-  // Serial.print(s->cur_stage);
-  // Serial.print(" ");
-  Serial.print(m->current_ang_pos);
+  Serial.print((double)s->cur_stage/10, 4);
   Serial.print(" ");
-  Serial.print(m->target_pos);
+  Serial.print(m->current_ang_pos, 4);
   Serial.print(" ");
-  Serial.print(m->current_vel);
+  Serial.print(m->target_pos, 4);
   Serial.print(" ");
-  Serial.print(m->target_vel);
+  Serial.print(m->current_vel, 4);
+  Serial.print(" ");
+  Serial.print(m->target_vel, 4);
   Serial.println();
 }
 
@@ -371,9 +374,10 @@ void generate_curve(StepInfo *s, MotorDynamics *m, CurveParams *c)
 
 void read_motor(MotorDynamics *m)
 {
+  static uint8_t enter;
   m->current_pos = (double) calculate_position();   //Position
   m->current_ang_pos = clicks_to_rad(m->current_pos);
-  m->current_vel = calculate_angular_velocity(m->current_ang_pos);
+  m->current_vel = calculate_angular_velocity(m);
 }
 
 void gain_scheduling(ControlVals *c)
@@ -462,7 +466,7 @@ double get_target_position(StepInfo *s, CurveParams *c)
   }
   else
   {
-    target_pos = 0.5*((c->v[s->cur_stage] + c->v[s->cur_stage-1])/((double)(c->t[s->cur_stage] - c->t[s->cur_stage-1])/1000))*((double)(s->cur_step - c->t[s->cur_stage-1])/1000)*((double)(s->cur_step - c->t[s->cur_stage-1])/1000) + c->plus_c[s->cur_stage];
+    target_pos = 0.5*((c->v[s->cur_stage] - c->v[s->cur_stage-1])/((double)(c->t[s->cur_stage] - c->t[s->cur_stage-1])/1000))*((double)(s->cur_step - c->t[s->cur_stage-1])/1000)*((double)(s->cur_step - c->t[s->cur_stage-1])/1000) + ((c->v[s->cur_stage-1])*((double)(s->cur_step - c->t[s->cur_stage-1])/1000)) + c->plus_c[s->cur_stage];
     return target_pos;
   }
   return target_pos;
@@ -502,7 +506,13 @@ void BlinkLED()
 
 void encoderISR()
 {
+  // static uint32_t last_click;
+  // static int16_t last_pos;
   encoder.readAB();
+  // motor_vals.click_time = millis() -  last_click;
+  // motor_vals.click_dir = (encoder.getPosition() - last_pos)>=0? 1:0;
+  // last_click = millis();
+  // last_pos = encoder.getPosition();
 }
 
 int16_t calculate_position()
@@ -511,15 +521,21 @@ int16_t calculate_position()
   return pos;
 }
 
-double calculate_angular_velocity(double ang_pos)
+double calculate_angular_velocity(MotorDynamics *m)
 {
   static double prev_angular_position;
   static uint32_t  old_millis;
-  double velocity = 1000*(ang_pos - prev_angular_position)/((double)(millis()- old_millis));
-  prev_angular_position = ang_pos;
+  static double vels[5] = {0,0,0,0,0};
+  static uint8_t stage = 0;
+  vels[stage] = 1000*(m->current_ang_pos - prev_angular_position)/((double)(millis()- old_millis));
+  if (++stage == 5) stage = 0;
+  double sum = vels[0] + vels[1] + vels[2] + vels[3] + vels[4];
+  double velocity = sum/5;
+  prev_angular_position = m->current_ang_pos;
   old_millis = millis();
-  
   return velocity;
+  // if (m->click_dir) return (CLICKS_TO_RAD*1000/(double)m->click_time);
+  // else return (-CLICKS_TO_RAD*1000/(double)m->click_time);
 }
 
 int16_t calculate_angular_acceleration(double ang_vel)

@@ -30,6 +30,7 @@
 #define ACCEL_2 -1
 #define ACCEL_3 -8
 #define ACCEL_4 0.23
+#define ZERO_OFFSET 125
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -58,12 +59,12 @@
 #define FILTER        0
 #define FILTER_PWM    0
 
-#define K1            85
-#define K2            4
+#define K1            150//85
+#define K2            10//4
 #define K3            150
-#define K4            4
+#define K4            0//4
 #define K1_W          35
-#define K2_W          1
+#define K2_W          0//1
 //Targets times
 #define FIRST_TIME         600
 #define SECOND_TIME        2000
@@ -109,8 +110,8 @@ struct CurveParams
   double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   double theta_dot_max_fall = 36/10;
-  uint32_t t_d = 2000;
-  double a_t = 10;
+  uint32_t t_d = 3000;
+  double a_t = 20;
   uint32_t t_f = 6000;
 
   double accel[3] = 
@@ -120,44 +121,43 @@ struct CurveParams
     ACCEL_3
   };
 
-  // double v[7] = 
-  // {
-  //   0.14428637,
-  //   0.13488079,
-  //   0,
-  //   0,
-  //   -0.14428637,
-  //   0,
-  //   0
-  // };
-
-  // uint32_t t[7] = 
-  // {
-  //   515,
-  //   1034,
-  //   2000,
-  //   3000,
-  //   4117,
-  //   5234,
-  //   6000
-  // };
-
   double v[7];
   uint32_t t[7];
   double plus_c[7];
 
-  // double plus_c[7] =
-  // {
-  //   0,
-  //   0.5*(v[0] * ((double)(t[0])/1000)),
-  //   plus_c[1] + (0.5*(double)(v[1] + v[0])*((double)(t[1] - t[0])/1000)),
-  //   plus_c[2] + (0.5*(double)(v[2] + v[1])*((double)(t[2] - t[1])/1000)),
-  //   plus_c[3] + (0.5*(double)(v[3] + v[2])*((double)(t[3] - t[2])/1000)),
-  //   plus_c[4] + (0.5*(double)(v[4] + v[3])*((double)(t[4] - t[3])/1000)),
-  //   plus_c[5] + (0.5*(double)(v[5] + v[4])*((double)(t[5] - t[4])/1000))
-  // };
-
 }curve_vals, new_vals;
+
+
+enum Stages
+{
+  INS_1 = 0,
+  INS_2 = 1,
+  INS_3 = 2,
+  REST_1 = 3,
+  EXP_1 = 4,
+  EXP_2 = 5,
+  REST_2 = 6
+};
+
+
+struct StepInfo
+{
+  uint32_t start_millis;
+  uint32_t cur_millis;
+  Stages cur_stage;
+  uint32_t cur_step;
+}step;
+
+struct PlotDat
+{
+  uint32_t cur_step;
+  double err_pos;
+  double err_vel;
+  double tar_pos;
+  double tar_vel;
+  double cur_pos;
+  double cur_vel;
+}plot;
 
 // Global vars.
 
@@ -185,20 +185,23 @@ int16_t deg_to_clicks(double deg);
 double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void mimo_control(MotorDynamics*, ControlVals*);
-double get_target_position(uint32_t, CurveParams*);
-double get_target_velocity(uint32_t, CurveParams*);
+double get_target_position(StepInfo*, CurveParams*);
+double get_target_velocity(StepInfo*, CurveParams*);
 double deg_to_rad(double);
 void pulse_interrupt();
 void lcd_update(LcdVals *lcd_vals);
 bool backlash_protection(double);
 bool blocked_motor_protection(double, double);
-void generate_curve(MotorDynamics*, CurveParams*);
-void read_motor(MotorDynamics*);
+void generate_curve(StepInfo * , MotorDynamics *, CurveParams *);
+void read_motor(MotorDynamics *);
 void gain_scheduling(ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
 void read_params(CurveParams *);
 void update_params(CurveParams *, CurveParams *);
+void plot_data(StepInfo *, CurveParams *, MotorDynamics *);
+void calc_step(StepInfo *, CurveParams *);
+double fmap(double in, double in_min, double in_max, double out_min, double out_max);
 
 
 void setup()
@@ -221,21 +224,12 @@ void setup()
   digitalWrite(PIN_DIR_B, HIGH);
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
-  // Serial.println("Booting Up...");
-  // Serial.println(plus_c[0],5);
-  // Serial.println(plus_c[1],5);
-  // Serial.println(plus_c[2],5);
-  // Serial.println(plus_c[3],5);
-  // Serial.println(plus_c[4],5);
-  // Serial.println(plus_c[5],5);
-  // Serial.println(plus_c[6],5);
-  // delay(10000);
-} 
+}
 
 void loop() 
 {
   BlinkLED();
-  // if(!cal_flag) calibrate();
+  if(!cal_flag) calibrate();
 
   if(millis()>next_params_update)
   {
@@ -246,12 +240,14 @@ void loop()
 
   if(millis()>next_motor_update)
   {
+    calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
     gain_scheduling(&control_vals);
-    generate_curve(&motor_vals, &curve_vals);
+    generate_curve(&step, &motor_vals, &curve_vals);
     mimo_control(&motor_vals, &control_vals);
     filter_motor(&motor_vals);
     execute_motor(&motor_vals);
+    plot_data(&step, &curve_vals, &motor_vals);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
@@ -261,6 +257,41 @@ void loop()
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
+}
+
+void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
+{
+  Serial.print(s->cur_step);
+  Serial.print(" ");
+  // Serial.print(s->cur_stage);
+  // Serial.print(" ");
+  Serial.print(m->current_ang_pos);
+  Serial.print(" ");
+  Serial.print(m->target_pos);
+  Serial.print(" ");
+  Serial.print(m->current_vel);
+  Serial.print(" ");
+  Serial.print(m->target_vel);
+  Serial.println();
+}
+
+void calc_step(StepInfo *s, CurveParams *c)
+{
+  static bool init = 0;
+  if (!init)
+  {
+    s->start_millis = millis();
+    init = true;
+  }
+  if(millis()-s->start_millis >= 6000) s->start_millis = millis();
+  s->cur_step = (millis()-s->start_millis);
+  if(s->cur_step <= c->t[0])s->cur_stage = INS_1;
+  else if(s->cur_step <= c->t[1])s->cur_stage = INS_2;
+  else if(s->cur_step <= c->t[2])s->cur_stage = INS_3;
+  else if(s->cur_step <= c->t[3])s->cur_stage = REST_1;
+  else if(s->cur_step <= c->t[4])s->cur_stage = EXP_1;
+  else if(s->cur_step <= c->t[5])s->cur_stage = EXP_2;
+  else s->cur_stage = REST_2;
 }
 
 void update_params(CurveParams *c, CurveParams *n)
@@ -279,7 +310,7 @@ void update_params(CurveParams *c, CurveParams *n)
     c->t[2] = c->t_d;
     c->v[2] = 0;
     c->v[3] = 0;
-    c->t[3] = c->t[2] + 1000;
+    c->t[3] = c->t[2] + 500;
     c->t[4] = c->t[3] + (sqrt((c->a_t)/(c->accel[0]))*1000);
     c->v[4] = -c->accel[0]*((double)(c->t[4]-c->t[3])/1000) * DEG_TO_RAD;
     c->v[5] = 0;
@@ -312,7 +343,6 @@ void update_params(CurveParams *c, CurveParams *n)
     }
     Serial.println();
     delay(1000);
-
     init = 1;
   }
   return;
@@ -322,50 +352,50 @@ void read_params(CurveParams *c)
 {
   return;
 }
-void generate_curve(MotorDynamics *m, CurveParams *c)
+void generate_curve(StepInfo *s, MotorDynamics *m, CurveParams *c)
 {
-  static uint32_t initial_millis = millis();
-  if(millis()-initial_millis >= 6000) initial_millis = millis();
-  uint32_t current_step = (millis()-initial_millis);
-  m->target_vel = get_target_velocity(current_step, c);
-  m->target_pos = get_target_position(current_step, c);
-  // Serial.print(current_step);
+  // static uint32_t initial_millis = millis();
+  // if(millis()-initial_millis >= 6000) initial_millis = millis();
+  // uint32_t current_step = (millis()-initial_millis);
+
+  m->target_vel = get_target_velocity(s, c);
+  m->target_pos = get_target_position(s, c);
+  // Serial.print(((double)s->cur_step/1000));
   // Serial.print(" ");
-  Serial.print(m->target_vel*10);
-  Serial.print(" ");
-  Serial.println(m->target_pos*10);
+  // Serial.print(s->cur_stage);
+  // Serial.print(" ");
+  // Serial.print(m->target_vel*10);
+  // Serial.print(" ");
+  // Serial.println(m->target_pos*10);
 }
 
 void read_motor(MotorDynamics *m)
 {
-  static double motor_angular_position, motor_v_unf, prev_velocity;
   m->current_pos = (double) calculate_position();   //Position
   m->current_ang_pos = clicks_to_rad(m->current_pos);
-  motor_v_unf = calculate_angular_velocity(motor_angular_position);
-  m->current_vel = (double) ((motor_v_unf + prev_velocity * FILTER) / (FILTER + 1));  //Velocity
-  prev_velocity = m->current_vel;
+  m->current_vel = calculate_angular_velocity(m->current_ang_pos);
 }
 
 void gain_scheduling(ControlVals *c)
 {
-  static uint32_t initial_millis = millis();
-  uint32_t current_step = (millis()-initial_millis)%(RISE_TIME/*+DEAD_TIME+FALL_TIME*/+WAITING_TIME);
+  c->kp = K1;
+  c->kv = K2;
 
-  if(current_step < SECOND_TIME)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-  else if (current_step < THIRD_TIME)
-  {
-    c->kp = K3; 
-    c->kv = K4;
-  }
-  else
-  {
-    c->kp = K1_W;
-    c->kv = K2_W;
-  }
+  // if(current_step < SECOND_TIME)
+  // {
+  //   c->kp = K1;
+  //   c->kv = K2;
+  // }
+  // else if (current_step < THIRD_TIME)
+  // {
+  //   c->kp = K3; 
+  //   c->kv = K4;
+  // }
+  // else
+  // {
+  //   c->kp = K1_W;
+  //   c->kv = K2_W;
+  // }
 
 }
 
@@ -412,141 +442,49 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
   }
 
   motor_volts = c->kp * error_position + c->kv * error_velocity;
-  m->output = map(motor_volts, 0, 12, 0, 500);
+  m->output = fmap(motor_volts, 0, 12, 0, 500);
 
-
-  // Serial.print(millis());
-  // Serial.print(" ");
-  // prx1= 100*error_position;
-  // prx2 = 100*m->current_ang_pos;
-  // prx3 = 100*m->target_pos;
-  // Serial.print(prx1);
-  // Serial.print(" ");
-  // Serial.print(prx2);
-  // Serial.print(" ");
-  // Serial.print(prx3);
-  // Serial.print(" ");
-  // Serial.print(motor_volts,5);
-  // Serial.print(" ");
-  // Serial.print(error_velocity*100);
-  // Serial.print(" ");
-  // Serial.println(m->current_vel*100);
-  //Serial.print(" ");
-  // Serial.print(motor_pwm_filter);
-  // Serial.print(" ");
-  // Serial.println(target_position,5);
-  //  Serial.print(" ");
-  //  Serial.println(motor_volts,5);
-
-  //Serial.println(millis());
-  // Serial.println(target_position, 5);
-  // Serial.println(error_position,5);
-  // Serial.println(motor_pwm_filter);
-  // Serial.println(motor_angular_position,5);
-  // Serial.println(motor_volts);
-  // Serial.println(target_velocity,5);
-  
-  // Serial.println(motor_velocity,5);
-  // Serial.println(current_step,5);
-
-  // Serial.println(error_velocity,5);
 }
 
-// double get_target_position(uint32_t current_step, double vel)
-// {
-//   static double target_pos;
-//   static uint32_t prev_step = 0;
-//   static double prev_vel = 0;
-//   static double prev_pos = 0;
-//   target_pos = prev_pos + 0.5*(vel + prev_vel)*((double)(current_step-prev_step)/1000);
-//   prev_pos = target_pos;
-//   prev_step = current_step;
-//   prev_vel = vel;
-//   // else
-//   // {
-//   //   target_vel = 0;
-//   //   return target_vel;
-//   // }
-//   return target_pos;
-// }
+double fmap(double in, double in_min, double in_max, double out_min, double out_max)
+{
+  return((in/(in_max-in_min))*(out_max-out_min)+out_min);
+}
 
-double get_target_position(uint32_t current_step, CurveParams *c)
+
+double get_target_position(StepInfo *s, CurveParams *c)
 {
   double target_pos;
-  if(current_step <= c->t[0])
+  if(s->cur_stage == INS_1)
   {
-    target_pos = 0.5*(c->v[0]/((double)c->t[0]))*((double)(current_step*current_step/1000)) + c->plus_c[0];
-    return target_pos;
-  }
-  else if (current_step <= c->t[1])
-  {
-    target_pos = 0.5*((c->v[1] + c->v[0])/((double)(c->t[1] - c->t[0])/1000))*((double)(current_step - c->t[0])/1000)*((double)(current_step - c->t[0])/1000) + c->plus_c[1];
-    return target_pos;
-  }
-  else if (current_step <= c->t[2])
-  {
-    target_pos = 0.5*((c->v[2] + c->v[1])/((double)(c->t[2] - c->t[1])/1000))*((double)(current_step - c->t[1])/1000)*((double)(current_step - c->t[1])/1000) + c->plus_c[2];
-    return target_pos;
-  }
-  else if (current_step <= c->t[3])
-  {
-    target_pos = 0.5*((c->v[3] + c->v[2])/((double)(c->t[3] - c->t[2])/1000))*((double)(current_step - c->t[2])/1000)*((double)(current_step - c->t[2])/1000) + c->plus_c[3];
-    return target_pos;
-  }
-  else if (current_step <= c->t[4])
-  {
-    target_pos = 0.5*((c->v[4] + c->v[3])/((double)(c->t[4] - c->t[3])/1000))*((double)(current_step - c->t[3])/1000)*((double)(current_step - c->t[3])/1000) + c->plus_c[4];
-    return target_pos;
-  }
-  else if (current_step <= c->t[5])
-  {
-    target_pos = 0.5*((c->v[5] + c->v[4])/((double)(c->t[5] - c->t[4])/1000))*((double)(current_step - c->t[4])/1000)*((double)(current_step - c->t[4])/1000) + c->plus_c[5];
+    target_pos = 0.5*(c->v[s->cur_stage]/((double)c->t[s->cur_stage]))*((double)(s->cur_step*s->cur_step/1000)) + c->plus_c[0];
     return target_pos;
   }
   else
   {
-    target_pos = 0.5*((c->v[6] + c->v[5])/((double)(c->t[6] - c->t[5])/1000))*((double)(current_step - c->t[5])/1000)*((double)(current_step - c->t[5])/1000) + c->plus_c[6];
+    target_pos = 0.5*((c->v[s->cur_stage] + c->v[s->cur_stage-1])/((double)(c->t[s->cur_stage] - c->t[s->cur_stage-1])/1000))*((double)(s->cur_step - c->t[s->cur_stage-1])/1000)*((double)(s->cur_step - c->t[s->cur_stage-1])/1000) + c->plus_c[s->cur_stage];
     return target_pos;
   }
   return target_pos;
 }
 
-double get_target_velocity(uint32_t current_step, CurveParams *c)
+double get_target_velocity(StepInfo *s, CurveParams *c)
 {
   static double target_vel;
-  if(current_step <= c->t[0])
+  if(s->cur_stage == INS_1)
   {
-    target_vel = (c->v[0]/((double)c->t[0]))*((double)current_step);
+    target_vel = (c->v[s->cur_stage]/((double)c->t[s->cur_stage]))*((double)s->cur_step);
     return target_vel;
   }
-  else if (current_step <= c->t[1])
-  {
-    target_vel = c->v[0] + ((c->v[1] - c->v[0])/((double)(c->t[1] - c->t[0])))*((double)current_step - c->t[0]);
-    return target_vel;
-  }
-  else if (current_step <= c->t[2])
-  {
-    target_vel = c->v[1] + ((c->v[2] - c->v[1])/((double)(c->t[2] - c->t[1])))*((double)current_step - c->t[1]);
-    return target_vel;
-  }
-  else if (current_step <= c->t[3])
+
+  else if (s->cur_stage == REST_1 || s->cur_stage == REST_2)
   {
     target_vel = 0;
-    return target_vel;
-  }
-  else if (current_step <= c->t[4])
-  {
-    target_vel = c->v[3] + ((c->v[4] - c->v[3])/(c->t[4] - c->t[3]))*((double)current_step - c->t[3]);
-    return target_vel;
-  }
-  else if (current_step <= c->t[5])
-  {
-    target_vel = c->v[4] + ((c->v[5] - c->v[4])/(c->t[5] - c->t[4]))*((double)current_step  - c->t[4]);
     return target_vel;
   }
   else
   {
-    target_vel = 0;
+    target_vel = c->v[s->cur_stage-1] + ((c->v[s->cur_stage] - c->v[s->cur_stage-1])/((double)(c->t[s->cur_stage] - c->t[s->cur_stage-1])))*((double)s->cur_step - (double)c->t[s->cur_stage-1]);
     return target_vel;
   }
   return target_vel;
@@ -567,20 +505,6 @@ void encoderISR()
   encoder.readAB();
 }
 
-void pulse_interrupt()
-{
-  // signal = digitalRead(PIN_SERIAL);
-  // if(signal)
-  // {
-  //   start_pulse = micros();
-  // }
-  // else if(signal = 0)
-  // {
-  //   end_pulse = micros();
-  //   pulse_width = end_pulse-start_pulse;
-  // }
-}
-
 int16_t calculate_position()
 {
   int16_t pos = encoder.getPosition() - zero_position;
@@ -591,7 +515,7 @@ double calculate_angular_velocity(double ang_pos)
 {
   static double prev_angular_position;
   static uint32_t  old_millis;
-  double velocity = 1000*(ang_pos - prev_angular_position)/(millis()- old_millis);
+  double velocity = 1000*(ang_pos - prev_angular_position)/((double)(millis()- old_millis));
   prev_angular_position = ang_pos;
   old_millis = millis();
   
@@ -747,7 +671,7 @@ void calibrate()
     delay(1);
   }
   motor_write(0);
-  zero_position = encoder.getPosition() + 100;
+  zero_position = encoder.getPosition() + ZERO_OFFSET;
   lcd.setCursor(0,1);
   lcd.print("Done!");
   delay(500);
@@ -759,35 +683,4 @@ void calibrate()
   lcd.clear();
   cal_flag = 1;
 }
-// void super_calibrate()
-// {
-//   uint16_t prev_encoder_position;
-//   bool is_first_loop, init_on_limit;
-//   encoder.setPosition(48000);
-//   prev_encoder_position = encoder.getPosition();
-
-//   if(is_first_loop)
-//   {
-//     init_on_limit = digitalRead(PIN_LIMIT_SWITCH);
-//     is_first_loop = 0;
-//     for(int i=0;i<=CAL_TICKS;i++)
-//     {
-//       digitalWrite(PIN_DIR_A, HIGH);
-//       digitalWrite(PIN_DIR_B, LOW);
-//     }
-//       digitalWrite(PIN_DIR_A, LOW);
-//       digitalWrite(PIN_DIR_B, LOW);
-
-    
-
-
-//   }
-
-
-// }
-
-// void tick_movement()
-// {void lcd_update(LcdVals *lcd_vals)
-
-// }
 

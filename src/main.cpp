@@ -30,7 +30,7 @@
 #define ACCEL_2               -1
 #define ACCEL_3               -8
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           0.0625*ENCODER_CPR
+#define ZERO_OFFSET           0.009*ENCODER_CPR
 #define MIN_VEL               80
 
 // Update rates.
@@ -47,6 +47,7 @@
 #define CAL_DRIVE_BACK_ANG    5
 #define CAL_DRIVE_ANG         0.5
 #define CAL_DZ                0.5
+#define BREATH_PAUSE          0
 
 //Super Calibrate
 #define CAL_TICKS             5
@@ -117,7 +118,7 @@ struct CurveParams
   double theta_dot_max_fall = 36/10;
   double rr = 10;
   double x = 1;
-  double tidal_vol = 20;
+  double tidal_vol = 6;
   double a_t = tidal_vol;
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
@@ -453,6 +454,7 @@ void update_params(StepInfo *s, CurveParams *c, CurveParams *n)
     c->t_f = 60000/c->rr;
     c->t_d = c->t_f/(c->x+1);
     init = 0;
+    params_change_flag = 0;
   }
   if(!init)
   {
@@ -467,7 +469,7 @@ void update_params(StepInfo *s, CurveParams *c, CurveParams *n)
     c->t[2] = c->t_d;
     c->v[2] = 0;
     c->v[3] = 0;
-    c->t[3] = c->t[2] + 500;
+    c->t[3] = c->t[2] + BREATH_PAUSE;
     c->t[4] = c->t[3] + (sqrt((c->a_t)/(c->accel[0]))*1000);
     c->v[4] = -c->accel[0]*((double)(c->t[4]-c->t[3])/1000) * DEG_TO_RAD;
     c->v[5] = 0;
@@ -808,7 +810,7 @@ void calibrate()
     delay(1);
   }
   motor_write(0);
-  zero_position = encoder.getPosition() + ZERO_OFFSET;
+  zero_position = encoder.getPosition() + 180;
   lcd.setCursor(0,1);
   lcd.print("Done!");
   delay(500);
@@ -816,12 +818,17 @@ void calibrate()
   lcd.print("Place AMBUBAG");
   lcd.setCursor(0,1);
   lcd.print("between arms.");
+  Serial.println(encoder.getPosition());
+  Serial.println(calculate_position());
   delay(5000);
-  while(encoder.getPosition() < 0)
+  while(calculate_position() < 0)
   {
+    Serial.println(calculate_position());
     motor_write(MIN_VEL);
     delay(1);
   }
+  motor_write(0);
+  delay(4000);
   lcd.clear();
   cal_flag = 1;
 }

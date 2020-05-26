@@ -7,30 +7,31 @@
 
 
 // Pin definitions.
-#define PIN_ENCODER_A PA7
-#define PIN_ENCODER_B PA6
-#define PIN_DIR_A PA4
-#define PIN_DIR_B PA5
-#define PIN_PWM PA3
-#define PIN_LIMIT_SWITCH PA0
-#define PIN_INVERT PB10
-#define PIN_OPEN PA0 // UPDATE kp de 0.01 - 0.25
-#define PIN_REGULADOR_RANGO PA1 //UPDATE ANGULO DE OPERACION
-#define PIN_REGULADOR_TIEMPO PA2 //
+#define PIN_ENCODER_A         PA7
+#define PIN_ENCODER_B         PA6
+#define PIN_DIR_A             PA4
+#define PIN_DIR_B             PA5
+#define PIN_PWM               PA3
+#define PIN_LIMIT_SWITCH      PA0
+#define PIN_INVERT            PB10
+#define PIN_OPEN              PA0 // UPDATE kp de 0.01 - 0.25
+#define PIN_REGULADOR_RANGO   PA1 //UPDATE ANGULO DE OPERACION
+#define PIN_REGULADOR_TIEMPO  PA2 //
 
 // Physical constraints.
-#define ROTARYMIN 0
-#define ROTARYMAX 200
-#define ROTARYINITIAL 0
-#define ENCODER_CPR 2000
-#define MOTOR_DZ 0 //165
-#define BACKLASH_CLICKS 5
-#define PROTECTION_CLICKS 5
-#define ACCEL_1 16
-#define ACCEL_2 -1
-#define ACCEL_3 -8
-#define ACCEL_4 0.23
-#define ZERO_OFFSET 125
+#define ROTARYMIN             0
+#define ROTARYMAX             200
+#define ROTARYINITIAL         0
+#define ENCODER_CPR           8000
+#define MOTOR_DZ              0 //165
+#define BACKLASH_CLICKS       5
+#define PROTECTION_CLICKS     5
+#define ACCEL_1               16
+#define ACCEL_2               -1
+#define ACCEL_3               -8
+#define ACCEL_4               0.23
+#define ZERO_OFFSET           0.0625*ENCODER_CPR
+#define MIN_VEL               80
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -39,46 +40,47 @@
 #define BLINK_DELAY           500
 #define TARGET_UPDATE_DELAY   10
 #define PARAMS_UPDATE_DELAY   100
+#define SERIAL_UPDATE_DELAY   50
 
 // Parameter
-#define CAL_PWM 10
-#define CAL_DRIVE_BACK_ANG 5
-#define CAL_DRIVE_ANG 0.5
-#define CAL_DZ 0.5
+#define CAL_PWM               10
+#define CAL_DRIVE_BACK_ANG    5
+#define CAL_DRIVE_ANG         0.5
+#define CAL_DZ                0.5
 
 //Super Calibrate
-#define CAL_TICKS 5
+#define CAL_TICKS             5
 
 //Experiment
-#define RISE_TIME     3000
-#define DEAD_TIME     0//1000
-#define FALL_TIME     2000
-#define WAITING_TIME  2000
-#define ACC_TIME      800
-#define DEGREES       360
-#define FILTER        0
-#define FILTER_PWM    0
+#define RISE_TIME             3000
+#define DEAD_TIME             0//1000
+#define FALL_TIME             2000
+#define WAITING_TIME          2000
+#define ACC_TIME              800
+#define DEGREES               360
+#define FILTER                0
+#define FILTER_PWM            0
 
-#define K1            150//85
-#define K2            10//4
-#define K3            150
-#define K4            0//4
-#define K1_W          35
-#define K2_W          0//1
+#define K1                    150//85
+#define K2                    10//4
+#define K3                    150
+#define K4                    0//4
+#define K1_W                  35
+#define K2_W                  0//1
 //Targets times
-#define FIRST_TIME         600
-#define SECOND_TIME        2000
-#define THIRD_TIME         3000
+#define FIRST_TIME            600
+#define SECOND_TIME           2000
+#define THIRD_TIME            3000
 
 //Target degrees
-#define F_DEG         5
-#define S_DEG         11
-#define T_DEG         15
+#define F_DEG                 5
+#define S_DEG                 11
+#define T_DEG                 15
 
 //Target deg/s
-#define DEG_P_SEG     8
-#define DEG_TO_RAD    PI/180
-#define CLICKS_TO_RAD (2*PI/ENCODER_CPR)
+#define DEG_P_SEG             8
+#define DEG_TO_RAD            PI/180
+#define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
 
 //Control encoder
 struct ControlVals 
@@ -113,9 +115,12 @@ struct CurveParams
   double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   double theta_dot_max_fall = 36/10;
-  uint32_t t_d = 3000;
-  double a_t = 20;
-  uint32_t t_f = 6000;
+  double rr = 10;
+  double x = 1;
+  double tidal_vol = 20;
+  double a_t = tidal_vol;
+  uint32_t t_f = 60000/rr;
+  uint32_t t_d = t_f/(x+1);
 
   double accel[3] = 
   {
@@ -164,9 +169,9 @@ struct PlotDat
 
 // Global vars.
 
-bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0;
+bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update;
 double pos_to_vel;
 
 // Global objects.
@@ -184,13 +189,10 @@ int16_t calculate_position();
 double calculate_angular_velocity(MotorDynamics *);
 int16_t calculate_angular_acceleration(double);
 void encoderISR();
-int16_t deg_to_clicks(double deg);
-double clicks_to_rad(int16_t clicks);
 float arr_average(float *arr, uint16_t size);
 void mimo_control(MotorDynamics*, ControlVals*);
 double get_target_position(StepInfo*, CurveParams*);
 double get_target_velocity(StepInfo*, CurveParams*);
-double deg_to_rad(double);
 void pulse_interrupt();
 void lcd_update(LcdVals *lcd_vals);
 bool backlash_protection(double);
@@ -201,10 +203,13 @@ void gain_scheduling(ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
 void read_params(CurveParams *);
-void update_params(CurveParams *, CurveParams *);
+void update_params(StepInfo *, CurveParams *, CurveParams *);
 void plot_data(StepInfo *, CurveParams *, MotorDynamics *);
 void calc_step(StepInfo *, CurveParams *);
 double fmap(double in, double in_min, double in_max, double out_min, double out_max);
+void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n);
+void print_curve_data(CurveParams*);
+int8_t params_check(double, double, double);
 
 
 void setup()
@@ -234,10 +239,10 @@ void loop()
   BlinkLED();
   if(!cal_flag) calibrate();
 
-  if(millis()>next_params_update)
+  if(millis()>next_params_update || params_change_flag)
   {
-    read_params(&new_vals);
-    update_params(&curve_vals, &new_vals);
+    // read_params(&new_vals);
+    update_params(&step, &curve_vals, &new_vals);
     next_params_update = millis() + PARAMS_UPDATE_DELAY;
   }
 
@@ -260,10 +265,136 @@ void loop()
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
+
+  if (millis()>next_serial_update)
+  { 
+    if(Serial.available())
+    { 
+      char serial_buf [100];
+      memset(serial_buf, 0x00, sizeof(serial_buf)/sizeof(char));
+      int i = 0;
+      while (Serial.available())
+      {
+
+        serial_buf[i++] = Serial.read();
+      }
+      parse_params(serial_buf, (sizeof(serial_buf)/sizeof(char)), &curve_vals, &new_vals);
+      next_serial_update = millis() + SERIAL_UPDATE_DELAY;
+    }
+    else next_serial_update = millis() + SERIAL_UPDATE_DELAY;
+  }
+}
+
+void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
+{
+  char cmd[10];
+  int32_t u_value_1 = 0;
+  int32_t u_value_2 = 0;
+  int32_t u_value_3 = 0;
+  char temp_buf[100];
+  memset(temp_buf, 0x00, sizeof(temp_buf)/sizeof(char));
+  Serial.println(sscanf(buf, " %s %d %d %d ", cmd, &u_value_1, &u_value_2, &u_value_3));
+  double value_1 = (double)u_value_1/10;
+  double value_2 = (double)u_value_2/10;
+  double value_3 = (double)u_value_3/10;
+
+  if(!strcmp(cmd, "PING"))
+  {
+    Serial.println("PING");
+  }
+  else if(!strcmp(cmd, "PAUSE"))
+  {
+    Serial.println("Pausing the machine...");
+    pause = 1;
+  }
+  else if(!strcmp(cmd, "RESUME"))
+  {
+    Serial.println("Resuming the machine...");
+    pause = 0;
+  }
+  else if(!strcmp(cmd, "CAL"))
+  {
+    cal_flag = 0;
+  }
+  else if(!strcmp(cmd, "PLOT"))
+  {
+    plot_flag = !plot_flag;
+  }
+  else if(!strcmp(cmd, "PRINTP"))
+  {
+    print_curve_data(c);
+  }
+  else if(!strcmp(cmd, "PARAMS"))
+  {
+    if (value_1 == 0 || value_2 == 0 || value_3 == 0)
+    {
+      Serial.println("Not enough values!");
+      Serial.print(value_1);
+      Serial.print(value_2);
+      Serial.print(value_3);
+      return;
+    }
+    if(params_check(value_1, value_2, value_3))
+    {
+      n->rr = value_1;
+      n->x = value_2;
+      n->tidal_vol = value_3;
+      params_change_flag = 1;
+    }
+    else
+    {
+      Serial.println("Values not valid, imaginary root.");
+    }
+  }
+  else Serial.println("CMD not recognized");
+}
+
+int8_t params_check(double rr, double x, double tidal_vol)
+{
+  uint32_t t_f = 60000/rr;
+  uint32_t t_d = t_f/(x+1);
+  if(tidal_vol < (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return true;
+  else return false;
+}
+
+
+void print_curve_data(CurveParams *c)
+{
+  Serial.print("Timming --> ");
+  for(int i=0; i<7; i++)
+  {
+    Serial.print("T_");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(c->t[i]);
+    if(i<=6) Serial.print(", ");
+  }
+  Serial.println();
+  Serial.print("Velocities --> ");
+  for(int i=0; i<7; i++)
+  {
+    Serial.print("V_");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(c->v[i], 4);
+    if(i<=6) Serial.print(", ");
+  }
+  Serial.println();
+  Serial.print("Plus C --> ");
+  for(int i=0; i<7; i++)
+  {
+    Serial.print("C_");
+    Serial.print(i);
+    Serial.print(": ");
+    Serial.print(c->plus_c[i], 4);
+    if(i<=6) Serial.print(", ");
+  }
+  Serial.println();
 }
 
 void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
+  if(!plot_flag) return;
   Serial.print(s->cur_step);
   Serial.print(" ");
   Serial.print((double)s->cur_stage/10, 4);
@@ -280,29 +411,52 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 
 void calc_step(StepInfo *s, CurveParams *c)
 {
-  static bool init = 0;
+  static bool init = 0, was_paused = 0;
   if (!init)
   {
     s->start_millis = millis();
     init = true;
   }
-  if(millis()-s->start_millis >= 6000) s->start_millis = millis();
-  s->cur_step = (millis()-s->start_millis);
-  if(s->cur_step <= c->t[0])s->cur_stage = INS_1;
-  else if(s->cur_step <= c->t[1])s->cur_stage = INS_2;
-  else if(s->cur_step <= c->t[2])s->cur_stage = INS_3;
-  else if(s->cur_step <= c->t[3])s->cur_stage = REST_1;
-  else if(s->cur_step <= c->t[4])s->cur_stage = EXP_1;
-  else if(s->cur_step <= c->t[5])s->cur_stage = EXP_2;
-  else s->cur_stage = REST_2;
+  if(was_paused && !pause)
+  {
+    s->start_millis = millis() - s->cur_step;
+    was_paused = false;
+  }
+  if (!pause)
+  {
+    if(millis()-s->start_millis >= 6000) s->start_millis = millis();
+    s->cur_step = (millis()-s->start_millis);
+    if(s->cur_step <= c->t[0])s->cur_stage = INS_1;
+    else if(s->cur_step <= c->t[1])s->cur_stage = INS_2;
+    else if(s->cur_step <= c->t[2])s->cur_stage = INS_3;
+    else if(s->cur_step <= c->t[3])s->cur_stage = REST_1;
+    else if(s->cur_step <= c->t[4])s->cur_stage = EXP_1;
+    else if(s->cur_step <= c->t[5])s->cur_stage = EXP_2;
+    else s->cur_stage = REST_2;
+  }
+  else
+  {
+    if(!was_paused) was_paused = true;
+    return;
+  }
 }
 
-void update_params(CurveParams *c, CurveParams *n)
+void update_params(StepInfo *s, CurveParams *c, CurveParams *n)
 {
   static bool init;
-  double sq, den, plus;
+  if (params_change_flag && s->cur_step < 20)
+  {
+    c->tidal_vol = n->tidal_vol;
+    c->rr = n->rr;
+    c->x = n->x;
+    c->a_t = c->tidal_vol;
+    c->t_f = 60000/c->rr;
+    c->t_d = c->t_f/(c->x+1);
+    init = 0;
+  }
   if(!init)
   {
+    double sq, den, plus;
     sq = sqrt(-1*(2*c->a_t*(c->accel[0]-c->accel[2]) + (c->accel[0]*c->accel[2]*((double)c->t_d/1000)*((double)c->t_d/1000)))*(c->accel[0]-c->accel[1])*(c->accel[1]-c->accel[2]));
     den = ((c->accel[0]-c->accel[2])*(c->accel[0]-c->accel[1]));
     plus = ((c->accel[0]- c->accel[1])*c->accel[2]*((double)c->t_d/1000));
@@ -327,25 +481,7 @@ void update_params(CurveParams *c, CurveParams *n)
     c->plus_c[4] = c->plus_c[3] + (0.5*(double)(c->v[3] + c->v[2])*((double)(c->t[3] - c->t[2])/1000));
     c->plus_c[5] = c->plus_c[4] + (0.5*(double)(c->v[4] + c->v[3])*((double)(c->t[4] - c->t[3])/1000));
     c->plus_c[6] = c->plus_c[5] + (0.5*(double)(c->v[5] + c->v[4])*((double)(c->t[5] - c->t[4])/1000));
-    for(int i=0; i<7; i++)
-    {
-      Serial.print(c->t[i]);
-      Serial.print(" ");
-    }
-    Serial.println();
-    for(int i=0; i<7; i++)
-    {
-      Serial.print(c->v[i], 4);
-      Serial.print(" ");
-    }
-    Serial.println();
-    for(int i=0; i<7; i++)
-    {
-      Serial.print(c->plus_c[i], 4);
-      Serial.print(" ");
-    }
-    Serial.println();
-    delay(1000);
+    print_curve_data(c);
     init = 1;
   }
   return;
@@ -357,26 +493,17 @@ void read_params(CurveParams *c)
 }
 void generate_curve(StepInfo *s, MotorDynamics *m, CurveParams *c)
 {
-  // static uint32_t initial_millis = millis();
-  // if(millis()-initial_millis >= 6000) initial_millis = millis();
-  // uint32_t current_step = (millis()-initial_millis);
-
-  m->target_vel = get_target_velocity(s, c);
-  m->target_pos = get_target_position(s, c);
-  // Serial.print(((double)s->cur_step/1000));
-  // Serial.print(" ");
-  // Serial.print(s->cur_stage);
-  // Serial.print(" ");
-  // Serial.print(m->target_vel*10);
-  // Serial.print(" ");
-  // Serial.println(m->target_pos*10);
+  if(!pause)
+  {
+    m->target_vel = get_target_velocity(s, c);
+    m->target_pos = get_target_position(s, c);
+  }
 }
 
 void read_motor(MotorDynamics *m)
 {
-  static uint8_t enter;
-  m->current_pos = (double) calculate_position();   //Position
-  m->current_ang_pos = clicks_to_rad(m->current_pos);
+  m->current_pos = (double) calculate_position();
+  m->current_ang_pos = CLICKS_TO_RAD * m->current_pos;
   m->current_vel = calculate_angular_velocity(m);
 }
 
@@ -384,23 +511,6 @@ void gain_scheduling(ControlVals *c)
 {
   c->kp = K1;
   c->kv = K2;
-
-  // if(current_step < SECOND_TIME)
-  // {
-  //   c->kp = K1;
-  //   c->kv = K2;
-  // }
-  // else if (current_step < THIRD_TIME)
-  // {
-  //   c->kp = K3; 
-  //   c->kv = K4;
-  // }
-  // else
-  // {
-  //   c->kp = K1_W;
-  //   c->kv = K2_W;
-  // }
-
 }
 
 void filter_motor(MotorDynamics *m)
@@ -422,12 +532,17 @@ void filter_motor(MotorDynamics *m)
 
 void execute_motor(MotorDynamics *m)
 {
+  if (pause)
+  {
+    motor_write(0);
+    return;
+  }
   motor_write(m->output);
 }
 
 void mimo_control(MotorDynamics *m, ControlVals *c)
 {
-  static double error_position, prx1,prx2,prx3;
+  static double error_position;
   static double error_velocity;
   static double motor_volts;
 
@@ -506,13 +621,7 @@ void BlinkLED()
 
 void encoderISR()
 {
-  // static uint32_t last_click;
-  // static int16_t last_pos;
   encoder.readAB();
-  // motor_vals.click_time = millis() -  last_click;
-  // motor_vals.click_dir = (encoder.getPosition() - last_pos)>=0? 1:0;
-  // last_click = millis();
-  // last_pos = encoder.getPosition();
 }
 
 int16_t calculate_position()
@@ -534,8 +643,35 @@ double calculate_angular_velocity(MotorDynamics *m)
   prev_angular_position = m->current_ang_pos;
   old_millis = millis();
   return velocity;
-  // if (m->click_dir) return (CLICKS_TO_RAD*1000/(double)m->click_time);
-  // else return (-CLICKS_TO_RAD*1000/(double)m->click_time);
+}
+
+double calculate_angular_velocity_fod3(MotorDynamics *m)
+{
+  static uint8_t index = 0, stage = 0;
+  static double prev_angular_position, prev_velocity;
+  double velocity;
+  static uint32_t  old_millis;
+  static double vels[5] = {0,0,0,0,0}, pos[3] = {0,0,0};
+  if(++index >= 3) index = 0;
+  pos[index] = m->current_ang_pos;
+  double dh = 2*(millis() - old_millis)/1000;
+  switch (index)
+  {
+    case 0:
+      velocity = (-4*pos[2] + (pos[1]) + 3*pos[0])/dh;
+      break;
+    case 1:
+      velocity = (-4*pos[0] + (pos[2]) + 3*pos[1])/dh;
+      break;
+    case 2:
+      velocity = (-4*pos[1] + (pos[0]) + 3*pos[0])/dh;
+      break;
+  }
+  vels[stage] = 1000*(m->current_ang_pos - prev_angular_position)/((double)(millis()- old_millis));
+  if (++stage == 5) stage = 0;
+  prev_angular_position = m->current_ang_pos;
+  old_millis = millis();
+  return velocity;
 }
 
 int16_t calculate_angular_acceleration(double ang_vel)
@@ -648,21 +784,6 @@ void motor_write(double pwm)
   myservo.writeMicroseconds(1500+pwm);
 }
 
-double clicks_to_rad(int16_t clicks)
-{
-  return((double)(((double)360*((double)(3.1416/180))/(double)ENCODER_CPR)*(double)clicks));
-}
-
-int16_t deg_to_clicks(double deg)
-{
-  return((int16_t)((deg/360)*ENCODER_CPR));
-}
-
-double deg_to_rad(double deg)
-{
-  return((double)((deg*3.1416/180)));
-}
-
 void lcd_update(LcdVals *lcd_vals)
 {
   static int16_t prev_enc_pos;
@@ -683,7 +804,7 @@ void calibrate()
   lcd.print("Calibrating...");
   while(digitalRead(PIN_LIMIT_SWITCH))
   {
-    motor_write(-80);
+    motor_write(-MIN_VEL);
     delay(1);
   }
   motor_write(0);
@@ -696,6 +817,11 @@ void calibrate()
   lcd.setCursor(0,1);
   lcd.print("between arms.");
   delay(5000);
+  while(encoder.getPosition() < 0)
+  {
+    motor_write(MIN_VEL);
+    delay(1);
+  }
   lcd.clear();
   cal_flag = 1;
 }

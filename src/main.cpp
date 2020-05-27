@@ -25,10 +25,10 @@
 #define ACCEL_2               -1
 #define ACCEL_3               -8
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           0.01*ENCODER_CPR
+#define ZERO_OFFSET           128pl
 #define MIN_VEL               80
 #define VENTURI_SMALL_DIAM    9e-3f
-#define VENTURI_BIG_DIAM      22.5e-3f
+#define VENTURI_BIG_DIAM      20e-3f
 #define AIR_DENSITY           1.2f
 #define VENTURI_SMALL_AREA    (VENTURI_SMALL_DIAM*VENTURI_SMALL_DIAM/4)*PI
 #define VENTURI_BIG_AREA      (VENTURI_BIG_DIAM*VENTURI_BIG_DIAM/4)*PI
@@ -254,9 +254,9 @@ void setup()
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
-  // if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
-  // Serial.println(ads.readADC_Differential_0_1());
-  // Serial.println(ads.readADC_Differential_2_3());
+  if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
+  Serial.println(ads.readADC_Differential_0_1());
+  Serial.println(ads.readADC_Differential_2_3());
 }
 
 void loop() 

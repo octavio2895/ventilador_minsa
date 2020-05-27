@@ -25,7 +25,7 @@
 #define ACCEL_2               -1
 #define ACCEL_3               -8
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           0.009*ENCODER_CPR
+#define ZERO_OFFSET           0.01*ENCODER_CPR
 #define MIN_VEL               80
 #define VENTURI_SMALL_DIAM    9e-3f
 #define VENTURI_BIG_DIAM      22.5e-3f
@@ -262,7 +262,7 @@ void setup()
 void loop() 
 {
   BlinkLED();
-  // if(!cal_flag) calibrate();
+  if(!cal_flag) calibrate();
   // if(pres_cal_fail && millis() > next_pres_cal)
   // {
   //   Serial.println("Pressure sensor cannot calibrate!");
@@ -496,6 +496,8 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   Serial.print(m->current_vel, 4);
   Serial.print(" ");
   Serial.print(m->target_vel, 4);
+  Serial.print(" ");
+  Serial.print(c->t_f);
   Serial.println();
 }
 
@@ -901,7 +903,7 @@ void calibrate()
   }
   motor_write(0);
   Serial.println("Done!");
-  zero_position = encoder.getPosition() + 180;
+  zero_position = encoder.getPosition() + ZERO_OFFSET;
   // lcd.setCursor(0,1);
   // lcd.print("Done!");
   delay(500);

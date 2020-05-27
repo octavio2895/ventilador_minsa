@@ -33,6 +33,12 @@
 #define VENTURI_SMALL_AREA    (VENTURI_SMALL_DIAM*VENTURI_SMALL_DIAM/4)*PI
 #define VENTURI_BIG_AREA      (VENTURI_BIG_DIAM*VENTURI_BIG_DIAM/4)*PI
 #define MULTIPLIER            0.0078125f
+#define MAX_VOL               10
+#define MIN_VOL               0
+#define MAX_RR                15
+#define MIN_RR                0
+#define MAX_X                 4
+#define MIN_X                 1
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -248,22 +254,22 @@ void setup()
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
-  if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
-  Serial.println(ads.readADC_Differential_0_1());
-  Serial.println(ads.readADC_Differential_2_3());
+  // if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
+  // Serial.println(ads.readADC_Differential_0_1());
+  // Serial.println(ads.readADC_Differential_2_3());
 }
 
 void loop() 
 {
   BlinkLED();
   // if(!cal_flag) calibrate();
-  if(pres_cal_fail && millis() > next_pres_cal)
-  {
-    Serial.println("Pressure sensor cannot calibrate!");
-    if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
-    else pres_cal_fail = 0;
-    next_pres_cal = millis() + PRES_CAL_DELAY;
-  }
+  // if(pres_cal_fail && millis() > next_pres_cal)
+  // {
+  //   Serial.println("Pressure sensor cannot calibrate!");
+  //   if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
+  //   else pres_cal_fail = 0;
+  //   next_pres_cal = millis() + PRES_CAL_DELAY;
+  // }
 
   if (millis() > next_sensor_update)
   {
@@ -401,17 +407,22 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
       Serial.print(value_3);
       return;
     }
-    if(params_check(value_1, value_2, value_3))
+
+    int param_check_var = params_check(value_1, value_2, value_3);
+    if(param_check_var == 0)
     {
       n->rr = value_1;
       n->x = value_2;
       n->tidal_vol = value_3;
       params_change_flag = 1;
     }
-    else
-    {
-      Serial.println("Values not valid. Try again...");
-    }
+    else if (param_check_var == 1) Serial.println("Tidal volume too high! Ignoring...");
+    else if (param_check_var == 2) Serial.println("Tidal volume too low! Ignoring...");
+    else if (param_check_var == 3) Serial.println("Respiration rate too high!, ignoring...");
+    else if (param_check_var == 4) Serial.println("Respiration rate too low!, ignoring...");
+    else if (param_check_var == 5) Serial.println("Respiration relation too high!, ignoring...");
+    else if (param_check_var == 6) Serial.println("Respiration ralation too low!, ignoring...");
+    else Serial.println("Impossible combination, ignoring...");
   }
   else Serial.println("CMD not recognized");
 }
@@ -420,10 +431,15 @@ int8_t params_check(double rr, double x, double tidal_vol)
 {
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
-  if(rr<0 || x<0 || tidal_vol<0) return false;
-  if(tidal_vol > (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return false;
-  if(t_d > 1000*sqrt((-2*tidal_vol*(ACCEL_1 - ACCEL_2))/(ACCEL_1*ACCEL_2))) return false;
-  return true;
+  if(tidal_vol > MAX_VOL) return 1;
+  if(tidal_vol<MIN_VOL) return 2;
+  if(rr>MAX_RR) return 3;
+  if(rr<MIN_RR) return 4;
+  if(x>MAX_X) return 5;
+  if(x<MIN_X) return 6;
+  if(tidal_vol > (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return 7;
+  if(t_d > 1000*sqrt((-2*tidal_vol*(ACCEL_1 - ACCEL_2))/(ACCEL_1*ACCEL_2))) return 8;
+  return false;
 }
 
 void print_curve_data(CurveParams *c)
@@ -612,7 +628,7 @@ void execute_motor(MotorDynamics *m)
     motor_write(0);
     return;
   }
-  motor_write(m->output);
+  else motor_write(m->output);
 }
 
 void mimo_control(MotorDynamics *m, ControlVals *c)
@@ -874,23 +890,25 @@ void lcd_update(LcdVals *lcd_vals)
 
 void calibrate()
 {
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("Calibrating...");
+  // lcd.clear();
+  // lcd.setCursor(0,0);
+  // lcd.print("Calibrating...");
+  Serial.print("Calibrating... ");
   while(digitalRead(PIN_LIMIT_SWITCH))
   {
     motor_write(-MIN_VEL);
     delay(1);
   }
   motor_write(0);
+  Serial.println("Done!");
   zero_position = encoder.getPosition() + 180;
-  lcd.setCursor(0,1);
-  lcd.print("Done!");
+  // lcd.setCursor(0,1);
+  // lcd.print("Done!");
   delay(500);
-  lcd.setCursor(0,0);
-  lcd.print("Place AMBUBAG");
-  lcd.setCursor(0,1);
-  lcd.print("between arms.");
+  // lcd.setCursor(0,0);
+  // lcd.print("Place AMBUBAG");
+  // lcd.setCursor(0,1);
+  // lcd.print("between arms.");
   Serial.println(encoder.getPosition());
   Serial.println(calculate_position());
   delay(5000);
@@ -902,7 +920,7 @@ void calibrate()
   }
   motor_write(0);
   delay(4000);
-  lcd.clear();
+  // lcd.clear();
   cal_flag = 1;
 }
 

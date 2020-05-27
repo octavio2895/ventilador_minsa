@@ -4,19 +4,14 @@
 #include <LiquidCrystal_I2C.h>
 #include <Servo.h>
 #include <math.h>
+#include <Adafruit_ADS1015.h>
 
 
 // Pin definitions.
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
-#define PIN_DIR_A             PA4
-#define PIN_DIR_B             PA5
-#define PIN_PWM               PA3
-#define PIN_LIMIT_SWITCH      PA0
-#define PIN_INVERT            PB10
-#define PIN_OPEN              PA0 // UPDATE kp de 0.01 - 0.25
-#define PIN_REGULADOR_RANGO   PA1 //UPDATE ANGULO DE OPERACION
-#define PIN_REGULADOR_TIEMPO  PA2 //
+#define PIN_PWM               PA15
+#define PIN_LIMIT_SWITCH      PA8
 
 // Physical constraints.
 #define ROTARYMIN             0
@@ -32,6 +27,12 @@
 #define ACCEL_4               0.23
 #define ZERO_OFFSET           0.009*ENCODER_CPR
 #define MIN_VEL               80
+#define VENTURI_SMALL_DIAM    9e-3f
+#define VENTURI_BIG_DIAM      22.5e-3f
+#define AIR_DENSITY           1.2f
+#define VENTURI_SMALL_AREA    (VENTURI_SMALL_DIAM*VENTURI_SMALL_DIAM/4)*PI
+#define VENTURI_BIG_AREA      (VENTURI_BIG_DIAM*VENTURI_BIG_DIAM/4)*PI
+#define MULTIPLIER            0.0078125f
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -41,6 +42,8 @@
 #define TARGET_UPDATE_DELAY   10
 #define PARAMS_UPDATE_DELAY   100
 #define SERIAL_UPDATE_DELAY   50
+#define PRES_CAL_DELAY        100
+#define SENSOR_UDPATE_DELAY   30
 
 // Parameter
 #define CAL_PWM               10
@@ -82,6 +85,8 @@
 #define DEG_P_SEG             8
 #define DEG_TO_RAD            PI/180
 #define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
+
+// #define SCREEN
 
 //Control encoder
 struct ControlVals 
@@ -168,17 +173,26 @@ struct PlotDat
   double cur_vel;
 }plot;
 
+struct PressureSensor
+{
+  uint8_t id;
+  int16_t openpressure;
+  int16_t pressure_adc;
+  double pressure;
+}pres_0  = {.id = 0}, pres_1 = {.id = 1};
+
 // Global vars.
 
-bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0;
+bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update;
-double pos_to_vel;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update;
+double pos_to_vel, flow, volume;
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 Servo myservo;
+Adafruit_ADS1115 ads;
 
 // Prototypes
 void change_control_values(ControlVals *vals);
@@ -211,34 +225,54 @@ double fmap(double in, double in_min, double in_max, double out_min, double out_
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n);
 void print_curve_data(CurveParams*);
 int8_t params_check(double, double, double);
+int16_t calibrate_pressure_sensor(PressureSensor *);
+void read_pressure(PressureSensor *);
+double calculate_flow(PressureSensor *);
+double calculate_volume(StepInfo *, double);
 
 
 void setup()
 {
-  pinMode(PIN_DIR_A, OUTPUT);
-  pinMode(PIN_DIR_B, OUTPUT);
   pinMode(LED_BUILTIN, OUTPUT);
-  // pinMode(PIN_INVERT, INPUT);
   pinMode(PIN_LIMIT_SWITCH, INPUT_PULLUP);
-  // pinMode(PIN_OPEN, INPUT_PULLUP);
-  pinMode(PIN_REGULADOR_RANGO, INPUT_ANALOG);
-  pinMode(PIN_REGULADOR_TIEMPO, INPUT_ANALOG);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
+  #ifdef SCREEN
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
+  #endif
   analogWriteFrequency(1000);
-  digitalWrite(PIN_DIR_A, LOW);
-  digitalWrite(PIN_DIR_B, HIGH);
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
+  Serial.println("Booting up...");
+  ads.setGain(GAIN_SIXTEEN);
+  ads.begin();
+  if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
+  Serial.println(ads.readADC_Differential_0_1());
+  Serial.println(ads.readADC_Differential_2_3());
 }
 
 void loop() 
 {
   BlinkLED();
-  if(!cal_flag) calibrate();
+  // if(!cal_flag) calibrate();
+  if(pres_cal_fail && millis() > next_pres_cal)
+  {
+    Serial.println("Pressure sensor cannot calibrate!");
+    if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
+    else pres_cal_fail = 0;
+    next_pres_cal = millis() + PRES_CAL_DELAY;
+  }
+
+  if (millis() > next_sensor_update)
+  {
+    read_pressure(&pres_0);
+    read_pressure(&pres_1);
+    flow = calculate_flow(&pres_1);
+    volume = calculate_volume(&step, flow);
+    next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
+  }
 
   if(millis()>next_params_update || params_change_flag)
   {
@@ -259,13 +293,14 @@ void loop()
     plot_data(&step, &curve_vals, &motor_vals);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
-
+  #ifdef SCREEN
   if (millis()>next_screen_update) 
   {
     lcd_vals.encoder_pos = encoder.getPosition() - zero_position;
     lcd_update(&lcd_vals);    
     next_screen_update = millis() + 500;
   }
+  #endif
 
   if (millis()>next_serial_update)
   { 
@@ -284,6 +319,37 @@ void loop()
     }
     else next_serial_update = millis() + SERIAL_UPDATE_DELAY;
   }
+}
+
+double calculate_volume(StepInfo *s, double flow)
+{
+  static Stages prev_stage = INS_1;
+  static double volume = 0;
+  static double prev_flow = 0;
+  static uint32_t prev_millis = millis();
+
+  if(prev_stage != INS_1 && s->cur_stage == INS_1) volume = 0; //Resets volume to avoid drifting.
+  volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
+  prev_millis = millis();
+  prev_stage = s->cur_stage;
+  return volume;
+}
+
+double calculate_flow(PressureSensor *p)
+{
+  return (sqrt((2 * abs(p->pressure)) / (AIR_DENSITY * ((VENTURI_BIG_AREA / VENTURI_SMALL_AREA) * (VENTURI_BIG_AREA / VENTURI_SMALL_AREA) - 1))));
+}
+
+void read_pressure(PressureSensor *p)
+{
+  if(p->id == 1) p->pressure_adc = ((float) ads.readADC_Differential_2_3());
+  else p->pressure_adc = ((float) ads.readADC_Differential_0_1());
+  p->pressure = (p->pressure_adc - p->openpressure) * MULTIPLIER * 5;
+  if (p->pressure_adc >= floor(p->openpressure) - 1 && p->pressure_adc <= floor(p->openpressure) + 1) 
+  {
+    p->pressure = 0;
+  }
+  p->pressure = 1000*abs(p->pressure);
 }
 
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
@@ -344,7 +410,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     }
     else
     {
-      Serial.println("Values not valid, imaginary root.");
+      Serial.println("Values not valid. Try again...");
     }
   }
   else Serial.println("CMD not recognized");
@@ -354,10 +420,11 @@ int8_t params_check(double rr, double x, double tidal_vol)
 {
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
-  if(tidal_vol < (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return true;
-  else return false;
+  if(rr<0 || x<0 || tidal_vol<0) return false;
+  if(tidal_vol > (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return false;
+  if(t_d > 1000*sqrt((-2*tidal_vol*(ACCEL_1 - ACCEL_2))/(ACCEL_1*ACCEL_2))) return false;
+  return true;
 }
-
 
 void print_curve_data(CurveParams *c)
 {
@@ -397,6 +464,12 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
   if(!plot_flag) return;
   Serial.print(s->cur_step);
+  Serial.print(" ");
+  Serial.print(volume, 5);
+  Serial.print(" ");
+  Serial.print(flow, 5);
+  Serial.print(" ");
+  Serial.print(pres_1.pressure, 5);
   Serial.print(" ");
   Serial.print((double)s->cur_stage/10, 4);
   Serial.print(" ");
@@ -833,3 +906,38 @@ void calibrate()
   cal_flag = 1;
 }
 
+int16_t calibrate_pressure_sensor(PressureSensor *p) 
+{
+  int count = 0;
+  uint32_t timer = 0;
+  double open_pressure;
+  double average = 0;
+
+  while (true)
+  {
+    if (timer < millis()) 
+    {
+      if (p->id == 0) open_pressure = (double)ads.readADC_Differential_0_1();
+      if (p->id == 1) open_pressure = (double)ads.readADC_Differential_2_3();
+      average = (average * (double)count + open_pressure) / ((double)count + 1);
+      count++;
+      timer = millis() + 10;;
+    }
+    // if (count > 50) 
+    // {
+    //   if ((open_pressure > (average * 1.1f)) || (open_pressure < (average * 0.9f))) 
+    //   {
+    //     p->openpressure = 0;
+    //     return 0;
+    //   }
+    // }
+    if (count >= 200) 
+    {
+      p->openpressure = average;
+      Serial.println(p->openpressure);
+      break;
+    }
+  }  
+
+  return ((int16_t)average);
+}

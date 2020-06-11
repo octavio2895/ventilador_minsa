@@ -5,8 +5,9 @@
 #include <Servo.h>
 #include <math.h>
 #include <Adafruit_ADS1015.h>
+#include <PressureSensor.h>
 
-
+// #define USBD_USE_CDC
 // Pin definitions.
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
@@ -25,20 +26,15 @@
 #define ACCEL_2               -1
 #define ACCEL_3               -8
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           128pl
+#define ZERO_OFFSET           128
 #define MIN_VEL               80
-#define VENTURI_SMALL_DIAM    9e-3f
-#define VENTURI_BIG_DIAM      20e-3f
-#define AIR_DENSITY           1.2f
-#define VENTURI_SMALL_AREA    (VENTURI_SMALL_DIAM*VENTURI_SMALL_DIAM/4)*PI
-#define VENTURI_BIG_AREA      (VENTURI_BIG_DIAM*VENTURI_BIG_DIAM/4)*PI
-#define MULTIPLIER            0.0078125f
 #define MAX_VOL               10
 #define MIN_VOL               0
 #define MAX_RR                15
 #define MIN_RR                0
 #define MAX_X                 4
 #define MIN_X                 1
+
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -49,7 +45,7 @@
 #define PARAMS_UPDATE_DELAY   100
 #define SERIAL_UPDATE_DELAY   50
 #define PRES_CAL_DELAY        100
-#define SENSOR_UDPATE_DELAY   30
+#define SENSOR_UDPATE_DELAY   5
 
 // Parameter
 #define CAL_PWM               10
@@ -57,6 +53,7 @@
 #define CAL_DRIVE_ANG         0.5
 #define CAL_DZ                0.5
 #define BREATH_PAUSE          0
+#define MAX_ADC_RESOLUTION 16
 
 //Super Calibrate
 #define CAL_TICKS             5
@@ -179,13 +176,14 @@ struct PlotDat
   double cur_vel;
 }plot;
 
-struct PressureSensor
-{
-  uint8_t id;
-  int16_t openpressure;
-  int16_t pressure_adc;
-  double pressure;
-}pres_0  = {.id = 0}, pres_1 = {.id = 1};
+// struct PressureSensor
+// {
+//   uint8_t id = 0;
+//   int16_t openpressure = 0;
+//   double pressure_adc = 0;
+//   double pressure = 0;
+// }
+PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
 
@@ -210,7 +208,6 @@ int16_t calculate_position();
 double calculate_angular_velocity(MotorDynamics *);
 int16_t calculate_angular_acceleration(double);
 void encoderISR();
-float arr_average(float *arr, uint16_t size);
 void mimo_control(MotorDynamics*, ControlVals*);
 double get_target_position(StepInfo*, CurveParams*);
 double get_target_velocity(StepInfo*, CurveParams*);
@@ -220,7 +217,7 @@ bool backlash_protection(double);
 bool blocked_motor_protection(double, double);
 void generate_curve(StepInfo * , MotorDynamics *, CurveParams *);
 void read_motor(MotorDynamics *);
-void gain_scheduling(ControlVals *);
+void gain_scheduling(StepInfo *, ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
 void read_params(CurveParams *);
@@ -231,11 +228,7 @@ double fmap(double in, double in_min, double in_max, double out_min, double out_
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n);
 void print_curve_data(CurveParams*);
 int8_t params_check(double, double, double);
-int16_t calibrate_pressure_sensor(PressureSensor *);
-void read_pressure(PressureSensor *);
-double calculate_flow(PressureSensor *);
 double calculate_volume(StepInfo *, double);
-
 
 void setup()
 {
@@ -248,15 +241,15 @@ void setup()
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
   #endif
+  analogReadResolution(12);
   analogWriteFrequency(1000);
   Serial.begin(115200);
   myservo.attach(PIN_PWM, 1000, 2000);
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
-  if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
-  Serial.println(ads.readADC_Differential_0_1());
-  Serial.println(ads.readADC_Differential_2_3());
+  calibrate_pressure_sensor(&pres_0);
+  calibrate_pressure_sensor(&pres_1);
 }
 
 void loop() 
@@ -274,8 +267,8 @@ void loop()
   if (millis() > next_sensor_update)
   {
     read_pressure(&pres_0);
-    read_pressure(&pres_1);
-    flow = calculate_flow(&pres_1);
+    read_pressure_2(&pres_1);
+    flow = calculate_flow(&pres_0);
     volume = calculate_volume(&step, flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
@@ -291,12 +284,12 @@ void loop()
   {
     calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
-    gain_scheduling(&control_vals);
+    gain_scheduling(&step, &control_vals);
     generate_curve(&step, &motor_vals, &curve_vals);
     mimo_control(&motor_vals, &control_vals);
     filter_motor(&motor_vals);
     execute_motor(&motor_vals);
-    plot_data(&step, &curve_vals, &motor_vals);
+    plot_data(&step, &curve_vals, &motor_vals); // TODO: MOVE TO ITS OWN SCHEDULING
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
   #ifdef SCREEN
@@ -338,24 +331,8 @@ double calculate_volume(StepInfo *s, double flow)
   volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
   prev_millis = millis();
   prev_stage = s->cur_stage;
+  prev_flow = flow;
   return volume;
-}
-
-double calculate_flow(PressureSensor *p)
-{
-  return (sqrt((2 * abs(p->pressure)) / (AIR_DENSITY * ((VENTURI_BIG_AREA / VENTURI_SMALL_AREA) * (VENTURI_BIG_AREA / VENTURI_SMALL_AREA) - 1))));
-}
-
-void read_pressure(PressureSensor *p)
-{
-  if(p->id == 1) p->pressure_adc = ((float) ads.readADC_Differential_2_3());
-  else p->pressure_adc = ((float) ads.readADC_Differential_0_1());
-  p->pressure = (p->pressure_adc - p->openpressure) * MULTIPLIER * 5;
-  if (p->pressure_adc >= floor(p->openpressure) - 1 && p->pressure_adc <= floor(p->openpressure) + 1) 
-  {
-    p->pressure = 0;
-  }
-  p->pressure = 1000*abs(p->pressure);
 }
 
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
@@ -444,6 +421,12 @@ int8_t params_check(double rr, double x, double tidal_vol)
 
 void print_curve_data(CurveParams *c)
 {
+  Serial.print("RR: ");
+  Serial.print(c->rr);
+  Serial.print(" X: ");
+  Serial.print(c->x);
+  Serial.print(" Tidal Vol: ");
+  Serial.println(c->tidal_vol);
   Serial.print("Timming --> ");
   for(int i=0; i<7; i++)
   {
@@ -481,9 +464,15 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   if(!plot_flag) return;
   Serial.print(s->cur_step);
   Serial.print(" ");
-  Serial.print(volume, 5);
+  // Serial.print(pres_0.pressure_adc);
+  // Serial.print(" ");
+  Serial.print(pres_0.openpressure);
+  Serial.print(" ");
+  Serial.print(pres_0.pressure_adc);
   Serial.print(" ");
   Serial.print(flow, 5);
+  Serial.print(" ");
+  Serial.print(volume, 5);
   Serial.print(" ");
   Serial.print(pres_1.pressure, 5);
   Serial.print(" ");
@@ -600,10 +589,43 @@ void read_motor(MotorDynamics *m)
   m->current_vel = calculate_angular_velocity(m);
 }
 
-void gain_scheduling(ControlVals *c)
+void gain_scheduling(StepInfo *s, ControlVals *c)
 {
-  c->kp = K1;
-  c->kv = K2;
+  if(s->cur_stage == INS_1)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == INS_2)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == INS_3)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == REST_1)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == EXP_1)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == EXP_2)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
+  else if(s->cur_stage == REST_2)
+  {
+    c->kp = K1;
+    c->kv = K2;
+  }
 }
 
 void filter_motor(MotorDynamics *m)
@@ -924,40 +946,4 @@ void calibrate()
   delay(4000);
   // lcd.clear();
   cal_flag = 1;
-}
-
-int16_t calibrate_pressure_sensor(PressureSensor *p) 
-{
-  int count = 0;
-  uint32_t timer = 0;
-  double open_pressure;
-  double average = 0;
-
-  while (true)
-  {
-    if (timer < millis()) 
-    {
-      if (p->id == 0) open_pressure = (double)ads.readADC_Differential_0_1();
-      if (p->id == 1) open_pressure = (double)ads.readADC_Differential_2_3();
-      average = (average * (double)count + open_pressure) / ((double)count + 1);
-      count++;
-      timer = millis() + 10;;
-    }
-    // if (count > 50) 
-    // {
-    //   if ((open_pressure > (average * 1.1f)) || (open_pressure < (average * 0.9f))) 
-    //   {
-    //     p->openpressure = 0;
-    //     return 0;
-    //   }
-    // }
-    if (count >= 200) 
-    {
-      p->openpressure = average;
-      Serial.println(p->openpressure);
-      break;
-    }
-  }  
-
-  return ((int16_t)average);
 }

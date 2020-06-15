@@ -27,7 +27,7 @@
 #define ACCEL_3               -8
 #define ACCEL_4               0.23
 #define ZERO_OFFSET           128
-#define MIN_VEL               80
+#define MIN_VEL               50
 #define MAX_VOL               10
 #define MIN_VOL               0
 #define MAX_RR                15
@@ -68,10 +68,12 @@
 #define FILTER                0
 #define FILTER_PWM            0
 
-#define K1                    150//85
+#define K1                    300//85
 #define K2                    10//4
-#define K3                    150
+#define K3                    500
 #define K4                    0//4
+#define K5                    600//4
+#define K6                    0//4
 #define K1_W                  35
 #define K2_W                  0//1
 //Targets times
@@ -187,7 +189,7 @@ PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
 
-bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0;
+bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update;
 double pos_to_vel, flow, volume;
@@ -229,6 +231,8 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n);
 void print_curve_data(CurveParams*);
 int8_t params_check(double, double, double);
 double calculate_volume(StepInfo *, double);
+void home();
+void reset_vals();
 
 void setup()
 {
@@ -256,13 +260,6 @@ void loop()
 {
   BlinkLED();
   if(!cal_flag) calibrate();
-  // if(pres_cal_fail && millis() > next_pres_cal)
-  // {
-  //   Serial.println("Pressure sensor cannot calibrate!");
-  //   if(calibrate_pressure_sensor(&pres_0) == 0  || calibrate_pressure_sensor(&pres_1) == 0) pres_cal_fail = 1;
-  //   else pres_cal_fail = 0;
-  //   next_pres_cal = millis() + PRES_CAL_DELAY;
-  // }
 
   if (millis() > next_sensor_update)
   {
@@ -275,12 +272,11 @@ void loop()
 
   if(millis()>next_params_update || params_change_flag)
   {
-    // read_params(&new_vals);
     update_params(&step, &curve_vals, &new_vals);
     next_params_update = millis() + PARAMS_UPDATE_DELAY;
   }
 
-  if(millis()>next_motor_update)
+  if(millis()>next_motor_update && !stop_flag && cal_flag)
   {
     calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
@@ -292,6 +288,25 @@ void loop()
     plot_data(&step, &curve_vals, &motor_vals); // TODO: MOVE TO ITS OWN SCHEDULING
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
+
+  if(stop_flag && !reset_flag)
+  {
+    static bool first_run = 1;
+    if(first_run)
+    {
+      reset_vals();
+      first_run = false;
+    }
+    home();
+    if (reset_flag) 
+    {
+      first_run = true;
+      reset_flag = 0;
+      stop_flag = 0;
+      pause = true;
+    }
+  }
+
   #ifdef SCREEN
   if (millis()>next_screen_update) 
   {
@@ -310,7 +325,6 @@ void loop()
       int i = 0;
       while (Serial.available())
       {
-
         serial_buf[i++] = Serial.read();
       }
       parse_params(serial_buf, (sizeof(serial_buf)/sizeof(char)), &curve_vals, &new_vals);
@@ -318,6 +332,20 @@ void loop()
     }
     else next_serial_update = millis() + SERIAL_UPDATE_DELAY;
   }
+}
+
+void reset_vals()
+{
+  restart_step_flag = true;
+  volume = 0;
+}
+
+void home()
+{
+  Serial.println(encoder.getPosition());
+  if(encoder.getPosition() == zero_position) reset_flag = 1;
+  else if(encoder.getPosition() > zero_position) motor_write(-50);
+  else if (encoder.getPosition() < zero_position) motor_write(50);
 }
 
 double calculate_volume(StepInfo *s, double flow)
@@ -337,13 +365,13 @@ double calculate_volume(StepInfo *s, double flow)
 
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
 {
-  char cmd[10];
+  char cmd[20];
   int32_t u_value_1 = 0;
   int32_t u_value_2 = 0;
   int32_t u_value_3 = 0;
   char temp_buf[100];
   memset(temp_buf, 0x00, sizeof(temp_buf)/sizeof(char));
-  Serial.println(sscanf(buf, " %s %d %d %d ", cmd, &u_value_1, &u_value_2, &u_value_3));
+  sscanf(buf, " %s %d %d %d ", cmd, &u_value_1, &u_value_2, &u_value_3);
   double value_1 = (double)u_value_1/10;
   double value_2 = (double)u_value_2/10;
   double value_3 = (double)u_value_3/10;
@@ -351,6 +379,11 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   if(!strcmp(cmd, "PING"))
   {
     Serial.println("PING");
+  }
+  if(!strcmp(cmd, "STOP"))
+  {
+    Serial.println("Homing and stoping the machine...");
+    stop_flag = 1;
   }
   else if(!strcmp(cmd, "PAUSE"))
   {
@@ -463,12 +496,11 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
   if(!plot_flag) return;
   Serial.print(s->cur_step);
-  Serial.print(" ");
   // Serial.print(pres_0.pressure_adc);
   // Serial.print(" ");
-  Serial.print(pres_0.openpressure);
-  Serial.print(" ");
-  Serial.print(pres_0.pressure_adc);
+  // Serial.print(pres_0.openpressure);
+  // Serial.print(" ");
+  // Serial.print(pres_0.pressure_adc);
   Serial.print(" ");
   Serial.print(flow, 5);
   Serial.print(" ");
@@ -493,10 +525,19 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 void calc_step(StepInfo *s, CurveParams *c)
 {
   static bool init = 0, was_paused = 0;
+  if (restart_step_flag)
+  {
+    init = 0;
+    s->cur_stage = INS_1;
+    s->cur_step = 0;
+    s->cur_millis = 0;
+    restart_step_flag = 0;
+  }
   if (!init)
   {
     s->start_millis = millis();
     init = true;
+    restart_step_flag = 0;
   }
   if(was_paused && !pause)
   {
@@ -598,13 +639,13 @@ void gain_scheduling(StepInfo *s, ControlVals *c)
   }
   else if(s->cur_stage == INS_2)
   {
-    c->kp = K1;
-    c->kv = K2;
+    c->kp = K3;
+    c->kv = K4;
   }
   else if(s->cur_stage == INS_3)
   {
-    c->kp = K1;
-    c->kv = K2;
+    c->kp = K5;
+    c->kv = K6;
   }
   else if(s->cur_stage == REST_1)
   {
@@ -914,36 +955,61 @@ void lcd_update(LcdVals *lcd_vals)
 
 void calibrate()
 {
-  // lcd.clear();
-  // lcd.setCursor(0,0);
-  // lcd.print("Calibrating...");
-  Serial.print("Calibrating... ");
-  while(digitalRead(PIN_LIMIT_SWITCH))
+  static uint8_t state = 0;
+  static uint16_t stopped_millis = 0;
+
+  switch (state)
   {
-    motor_write(-MIN_VEL);
-    delay(1);
+  case 0:
+    pause = 1;
+    Serial.print("Calibrating...");
+    state++;
+    break;
+  case 1:
+    if(digitalRead(PIN_LIMIT_SWITCH))
+    {
+      motor_write(-MIN_VEL);
+    }
+    else
+    {
+      state++;
+      motor_write(0);
+    }
+    break;
+  case 2:
+    Serial.println(" Done!");
+    Serial.println(encoder.getPosition());
+    encoder.setPosition(0);
+    zero_position = encoder.getPosition() + ZERO_OFFSET;
+    Serial.println(zero_position);
+    stopped_millis = millis() + 5000;
+    state++;
+    break;
+  case 3:
+    if(millis() > stopped_millis) 
+    {
+      Serial.print("Going to zero...");
+      state++;
+    }
+    break;
+  case 4:
+    if((encoder.getPosition() - zero_position) < 0)
+    {
+      Serial.println(encoder.getPosition() - zero_position);
+      motor_write(MIN_VEL);
+    }
+    else
+    {
+      state++;
+      motor_write(0);
+    }
+    break;
+  case 5:
+    Serial.println(" Done!");
+    cal_flag = 1;
+    state = 0;
+    break;
+  default:
+    break;
   }
-  motor_write(0);
-  Serial.println("Done!");
-  zero_position = encoder.getPosition() + ZERO_OFFSET;
-  // lcd.setCursor(0,1);
-  // lcd.print("Done!");
-  delay(500);
-  // lcd.setCursor(0,0);
-  // lcd.print("Place AMBUBAG");
-  // lcd.setCursor(0,1);
-  // lcd.print("between arms.");
-  Serial.println(encoder.getPosition());
-  Serial.println(calculate_position());
-  delay(5000);
-  while(calculate_position() < 0)
-  {
-    Serial.println(calculate_position());
-    motor_write(MIN_VEL);
-    delay(1);
-  }
-  motor_write(0);
-  delay(4000);
-  // lcd.clear();
-  cal_flag = 1;
 }

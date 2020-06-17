@@ -12,11 +12,11 @@ double calculate_flow(PressureSensor *p)
 
 void read_pressure(PressureSensor *p)
 {
-  static int16_t adc[128];
+  static int16_t adc[8];
   static int16_t i = 0;
-  if(i>127)i = 0;
+  if(i>7)i = 0;
   adc[i] = analogRead(A0);
-  p->pressure_adc = arr_average(adc, 128);
+  p->pressure_adc = arr_average(adc, 8);
   p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 2000);
   i++;
 }
@@ -28,8 +28,8 @@ void read_pressure_2(PressureSensor *p)
   if(i>15)i = 0;
   adc[i] = abs(ads.readADC_Differential_2_3());
   p->pressure_adc = arr_average(adc, 16);
+  if(p->pressure_adc <= (double)(p->openpressure+1)) p->pressure_adc = (double)p->openpressure;
   p->pressure = ((p->pressure_adc - (double)p->openpressure) * .73903);
-  if(p->pressure < p->openpressure) p->pressure = p->openpressure;
   i++;
 }
 
@@ -44,6 +44,16 @@ double arr_average(int16_t arr[], uint16_t size)
   }
   average = sum / ((double)size);
   return (average);
+}
+
+double arr_top(double arr[], uint16_t size)
+{
+  double top = 0;
+  for(int i =  0; i<size; i++) 
+  {
+    if(arr[i] > top) top = arr[i];
+  }
+  return (top);
 }
 
 int16_t calibrate_pressure_sensor(PressureSensor *p) 

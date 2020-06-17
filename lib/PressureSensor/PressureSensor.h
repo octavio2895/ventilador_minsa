@@ -36,5 +36,6 @@ void read_pressure_2(PressureSensor *);
 double calculate_flow(PressureSensor *);
 int16_t calibrate_pressure_sensor(PressureSensor *);
 double arr_average(int16_t *, uint16_t);
+double arr_top(double *, uint16_t);
 
 #endif

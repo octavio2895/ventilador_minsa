@@ -7,7 +7,7 @@
 
 double calculate_flow(PressureSensor *p)
 {
-  return (sqrt((2 * abs(p->pressure)) / (AIR_DENSITY * ((VENTURI_BIG_AREA / VENTURI_SMALL_AREA) * (VENTURI_BIG_AREA / VENTURI_SMALL_AREA) - 1))));
+  return (VENTURI_BIG_AREA*1000*(sqrt((2 * abs(p->pressure)) / (AIR_DENSITY * ((SQ_AREA_RATIO)-1)))));
 }
 
 void read_pressure(PressureSensor *p)
@@ -17,7 +17,7 @@ void read_pressure(PressureSensor *p)
   if(i>127)i = 0;
   adc[i] = analogRead(A0);
   p->pressure_adc = arr_average(adc, 128);
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 0.226603218)*98.0665;
+  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 2000);
   i++;
 }
 
@@ -28,7 +28,8 @@ void read_pressure_2(PressureSensor *p)
   if(i>15)i = 0;
   adc[i] = abs(ads.readADC_Differential_2_3());
   p->pressure_adc = arr_average(adc, 16);
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER_2 * 1.25);
+  p->pressure = ((p->pressure_adc - (double)p->openpressure) * .73903);
+  if(p->pressure < p->openpressure) p->pressure = p->openpressure;
   i++;
 }
 

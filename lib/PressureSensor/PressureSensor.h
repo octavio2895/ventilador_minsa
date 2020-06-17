@@ -15,6 +15,8 @@
 #define AIR_DENSITY           1.2f
 #define VENTURI_SMALL_AREA    (VENTURI_SMALL_DIAM*VENTURI_SMALL_DIAM/4)*PI
 #define VENTURI_BIG_AREA      (VENTURI_BIG_DIAM*VENTURI_BIG_DIAM/4)*PI
+#define AREA_RATIO             4
+#define SQ_AREA_RATIO         16
 #define MULTIPLIER            5/4096
 #define MULTIPLIER_2          0.0078125
 

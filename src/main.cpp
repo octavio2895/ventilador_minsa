@@ -18,17 +18,17 @@
 #define ROTARYMIN             0
 #define ROTARYMAX             200
 #define ROTARYINITIAL         0
-#define ENCODER_CPR           8000
+#define ENCODER_CPR           2000
 #define MOTOR_DZ              0 //165
 #define BACKLASH_CLICKS       5
 #define PROTECTION_CLICKS     5
-#define ACCEL_1               16
-#define ACCEL_2               -1
-#define ACCEL_3               -8
+#define ACCEL_1               64
+#define ACCEL_2               -4
+#define ACCEL_3               -32
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           128
+#define ZERO_OFFSET           400
 #define MIN_VEL               50
-#define MAX_VOL               10
+#define MAX_VOL               50
 #define MIN_VOL               0
 #define MAX_RR                15
 #define MIN_RR                0
@@ -68,11 +68,11 @@
 #define FILTER                0
 #define FILTER_PWM            0
 
-#define K1                    300//85
-#define K2                    10//4
-#define K3                    500
+#define K1                    37.5//85
+#define K2                    1.25//4
+#define K3                    62.5
 #define K4                    0//4
-#define K5                    600//4
+#define K5                    75//4
 #define K6                    0//4
 #define K1_W                  35
 #define K2_W                  0//1
@@ -128,7 +128,7 @@ struct CurveParams
   double theta_dot_max_fall = 36/10;
   double rr = 10;
   double x = 1;
-  double tidal_vol = 6;
+  double tidal_vol = 48;
   double a_t = tidal_vol;
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
@@ -192,7 +192,7 @@ PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update;
-double pos_to_vel, flow, volume;
+double pos_to_vel, flow, volume, volume_in, volume_out;
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
@@ -254,6 +254,8 @@ void setup()
   ads.begin();
   calibrate_pressure_sensor(&pres_0);
   calibrate_pressure_sensor(&pres_1);
+  pres_0.openpressure = 251;
+  pres_1.openpressure = 13;
 }
 
 void loop() 
@@ -342,10 +344,10 @@ void reset_vals()
 
 void home()
 {
-  Serial.println(encoder.getPosition());
-  if(encoder.getPosition() == zero_position) reset_flag = 1;
-  else if(encoder.getPosition() > zero_position) motor_write(-50);
-  else if (encoder.getPosition() < zero_position) motor_write(50);
+  Serial.println(encoder.getPosition()<<1);
+  if(encoder.getPosition()<<1 == zero_position) reset_flag = 1;
+  else if(encoder.getPosition()<<1 > zero_position) motor_write(-50);
+  else if (encoder.getPosition()<<1 < zero_position) motor_write(50);
 }
 
 double calculate_volume(StepInfo *s, double flow)
@@ -353,10 +355,34 @@ double calculate_volume(StepInfo *s, double flow)
   static Stages prev_stage = INS_1;
   static double volume = 0;
   static double prev_flow = 0;
+  static double max_angle = 0;
+  static double init_angle = 0;
   static uint32_t prev_millis = millis();
 
-  if(prev_stage != INS_1 && s->cur_stage == INS_1) volume = 0; //Resets volume to avoid drifting.
-  volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
+  if(prev_stage != INS_1 && s->cur_stage == INS_1)
+  {
+    volume = 0; //Resets volume to avoid drifting.
+    Serial.print(max_angle, 5);
+    Serial.print(" ");
+    Serial.print(volume_in, 5);
+    Serial.print(" ");
+    Serial.println(volume_out, 5);
+  }
+  if(s->cur_stage == EXP_1 || s->cur_stage == EXP_2 || s->cur_stage == REST_2) volume = volume - (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
+  else volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
+
+  if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
+  {
+    max_angle = abs(init_angle - ((encoder.getPosition()<<1) - zero_position)*RAD_TO_DEG*CLICKS_TO_RAD);
+    volume_in = volume;
+  }
+
+  else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
+  {
+    // Serial.println("Volume out!");
+    volume_out = volume_in - volume;
+    init_angle = ((encoder.getPosition()<<1)-zero_position)*CLICKS_TO_RAD*RAD_TO_DEG;
+  }
   prev_millis = millis();
   prev_stage = s->cur_stage;
   prev_flow = flow;
@@ -385,7 +411,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     Serial.println("Homing and stoping the machine...");
     stop_flag = 1;
   }
-  else if(!strcmp(cmd, "PAUSE"))
+  else if(!strcmp(cmd, "Pausa"))
   {
     Serial.println("Pausing the machine...");
     pause = 1;
@@ -506,6 +532,12 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   Serial.print(" ");
   Serial.print(volume, 5);
   Serial.print(" ");
+  Serial.print(pres_0.pressure, 5);
+  Serial.print(" ");
+  Serial.print(pres_0.openpressure);
+  Serial.print(" ");
+  Serial.print(pres_0.pressure_adc, 5);
+  Serial.print(" ");
   Serial.print(pres_1.pressure, 5);
   Serial.print(" ");
   Serial.print((double)s->cur_stage/10, 4);
@@ -520,6 +552,26 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   Serial.print(" ");
   Serial.print(c->t_f);
   Serial.println();
+  /*Serial.print("DATATOGRAPH: ");
+  Serial.print("rUUuno");
+  Serial.print(volume_in, 4);
+  Serial.print(",rdos");
+  Serial.print(volume_out, 4);
+  Serial.print(",rtres");
+  Serial.print(c->a_t, 2);
+  Serial.print(",rcuatro");
+  Serial.print(s->cur_stage);
+  Serial.print(",guno");
+  Serial.print(m->current_ang_pos, 5);
+  Serial.print(",gdos");
+  Serial.print(m->current_vel, 5);
+  Serial.print(",gtres");
+  Serial.print(pres_1.pressure, 2);
+  Serial.print(",xxx");
+  Serial.print(s->cur_step);
+  Serial.print(".00,");
+  Serial.println();*/
+
 }
 
 void calc_step(StepInfo *s, CurveParams *c)
@@ -625,7 +677,7 @@ void generate_curve(StepInfo *s, MotorDynamics *m, CurveParams *c)
 
 void read_motor(MotorDynamics *m)
 {
-  m->current_pos = (double) calculate_position();
+  m->current_pos = (double) ((encoder.getPosition()<<1) - zero_position);
   m->current_ang_pos = CLICKS_TO_RAD * m->current_pos;
   m->current_vel = calculate_angular_velocity(m);
 }
@@ -782,7 +834,7 @@ void encoderISR()
 
 int16_t calculate_position()
 {
-  int16_t pos = encoder.getPosition() - zero_position;
+  int16_t pos = encoder.getPosition()<<1 - zero_position;
   return pos;
 }
 
@@ -978,9 +1030,9 @@ void calibrate()
     break;
   case 2:
     Serial.println(" Done!");
-    Serial.println(encoder.getPosition());
+    Serial.println(encoder.getPosition()<<1);
     encoder.setPosition(0);
-    zero_position = encoder.getPosition() + ZERO_OFFSET;
+    zero_position = (encoder.getPosition()<<1) + ZERO_OFFSET;
     Serial.println(zero_position);
     stopped_millis = millis() + 5000;
     state++;
@@ -993,9 +1045,9 @@ void calibrate()
     }
     break;
   case 4:
-    if((encoder.getPosition() - zero_position) < 0)
+    if(((encoder.getPosition()<<1) - zero_position) < 0)
     {
-      Serial.println(encoder.getPosition() - zero_position);
+      Serial.println((encoder.getPosition()<<1) - zero_position);
       motor_write(MIN_VEL);
     }
     else

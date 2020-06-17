@@ -22,16 +22,16 @@
 #define MOTOR_DZ              0 //165
 #define BACKLASH_CLICKS       5
 #define PROTECTION_CLICKS     5
-#define ACCEL_1               64
-#define ACCEL_2               -4
-#define ACCEL_3               -32
+#define ACCEL_1               320
+#define ACCEL_2               -20
+#define ACCEL_3               -160
 #define ACCEL_4               0.23
 #define ZERO_OFFSET           256
 #define MIN_VEL               75
 #define MIN_VEL_2             120
 #define MAX_VOL               50
 #define MIN_VOL               0
-#define MAX_RR                15
+#define MAX_RR                40
 #define MIN_RR                0
 #define MAX_X                 4
 #define MIN_X                 1
@@ -69,11 +69,11 @@
 #define FILTER                0
 #define FILTER_PWM            0
 
-#define K1                    100//85
+#define K1                    37.5//85
 #define K2                    1.25//4
-#define K3                    130
+#define K3                    120
 #define K4                    0//4
-#define K5                    280//4
+#define K5                    150//4
 #define K6                    0//4
 #define K1_W                  35
 #define K2_W                  0//1

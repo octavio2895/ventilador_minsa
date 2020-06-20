@@ -12,7 +12,14 @@
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
 #define PIN_PWM               PA15
+#define PIN_DIR               PB1
+#define PIN_CURRENT_SENSE     PB0
 #define PIN_LIMIT_SWITCH      PA8
+
+#define FORWARD_LOGIC         0
+#define BACKWARD_LOGIC        1
+
+#define USE_FLUTTER_PRINTS
 
 // Physical constraints.
 #define ROTARYMIN             0
@@ -27,14 +34,15 @@
 #define ACCEL_3               -160
 #define ACCEL_4               0.23
 #define ZERO_OFFSET           256
-#define MIN_VEL               75
-#define MIN_VEL_2             120
+#define MIN_VEL               80
+#define MIN_VEL_2             20
 #define MAX_VOL               50
 #define MIN_VOL               0
 #define MAX_RR                40
 #define MIN_RR                0
 #define MAX_X                 4
 #define MIN_X                 1
+#define MAX_PWM               256
 
 
 // Update rates.
@@ -47,6 +55,7 @@
 #define SERIAL_UPDATE_DELAY   50
 #define PRES_CAL_DELAY        100
 #define SENSOR_UDPATE_DELAY   5
+#define PLOT_UPDATE_DELAY     50
 
 // Parameter
 #define CAL_PWM               10
@@ -127,7 +136,7 @@ struct CurveParams
   double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
   double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
   double theta_dot_max_fall = 36/10;
-  double rr = 10;
+  double rr = 15;
   double x = 1;
   double tidal_vol = 42;
   double a_t = tidal_vol;
@@ -192,13 +201,13 @@ PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
-Servo myservo;
+// Servo myservo;
 Adafruit_ADS1115 ads;
 
 // Prototypes
@@ -239,6 +248,8 @@ void setup()
 {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_LIMIT_SWITCH, INPUT_PULLUP);
+  pinMode(PIN_PWM, OUTPUT_OPEN_DRAIN);
+  pinMode(PIN_DIR, OUTPUT);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
@@ -247,14 +258,15 @@ void setup()
   lcd.setCursor(0,0);
   #endif
   analogReadResolution(12);
-  analogWriteFrequency(1000);
+  analogWriteFrequency(20000);
+  analogWrite(PIN_PWM, 128);
   Serial.begin(115200);
-  myservo.attach(PIN_PWM, 1000, 2000);
+  // myservo.attach(PIN_PWM, 1000, 2000);
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
-  calibrate_pressure_sensor(&pres_0);
-  calibrate_pressure_sensor(&pres_1);
+  // calibrate_pressure_sensor(&pres_0);
+  // calibrate_pressure_sensor(&pres_1);
   pres_0.openpressure = 253;
   pres_1.openpressure = 13;
 }
@@ -280,6 +292,12 @@ void loop()
     next_params_update = millis() + PARAMS_UPDATE_DELAY;
   }
 
+  if(millis()>next_plot_update && plot_flag)
+  {
+    plot_data(&step, &curve_vals, &motor_vals);
+    next_plot_update = millis() + PLOT_UPDATE_DELAY;
+  }
+
   if(millis()>next_motor_update && !stop_flag && cal_flag)
   {
     calc_step(&step, &curve_vals);
@@ -289,7 +307,6 @@ void loop()
     mimo_control(&motor_vals, &control_vals);
     filter_motor(&motor_vals);
     execute_motor(&motor_vals);
-    plot_data(&step, &curve_vals, &motor_vals); // TODO: MOVE TO ITS OWN SCHEDULING
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
   }
 
@@ -306,7 +323,7 @@ void loop()
     {
       first_run = true;
       reset_flag = 0;
-  myservo.attach(PIN_PWM, 1000, 2000);
+  // myservo.attach(PIN_PWM, 1000, 2000);
       pause = true;
     }
   }
@@ -546,13 +563,91 @@ void print_curve_data(CurveParams *c)
 
 void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
-  if(!plot_flag) return;
-  /*Serial.print(s->cur_step);
+  // if(!plot_flag) return;
+  #ifdef USE_FLUTTER_PRINTS
+  static int16_t buffer_index = 0;
+  static double graph_1[5];
+  static double graph_2[5];
+  static double graph_3[5];
+  static uint32_t steps[5];
+  graph_1[buffer_index] = m->current_ang_pos;
+  graph_2[buffer_index] = m->target_pos;
+  graph_3[buffer_index] = m->current_vel;
+  steps[buffer_index] = s->cur_step;
+  if (buffer_index++ == 4)
+  {
+    Serial.print("DATATOGRAPH: ");
+    Serial.print("rUUuno");
+    Serial.print(volume_in, 4);
+    Serial.print(",rdos");
+    Serial.print(volume_out, 4);
+    Serial.print(",rtres");
+    Serial.print(pip, 2);
+    Serial.print(",rcuatro");
+    Serial.print(peep, 2);
+    Serial.print(",guno");
+    Serial.print(graph_1[0], 5);
+    Serial.print(",gdos");
+    Serial.print(graph_2[0], 5);
+    Serial.print(",gtres");
+    Serial.print(graph_3[0], 5);
+    Serial.print(",xxx");
+    Serial.print(steps[0]);
+    Serial.print(".00,");
+    Serial.println();
+    Serial.print("DATATOGRAPH: ");
+    Serial.print(",guno");
+    Serial.print(graph_1[1], 5);
+    Serial.print(",gdos");
+    Serial.print(graph_2[1], 5);
+    Serial.print(",gtres");
+    Serial.print(graph_3[1], 5);
+    Serial.print(",xxx");
+    Serial.print(steps[1]);
+    Serial.print(".00,");
+    Serial.println();
+    Serial.print("DATATOGRAPH: ");
+    Serial.print(",guno");
+    Serial.print(graph_1[2], 5);
+    Serial.print(",gdos");
+    Serial.print(graph_2[2], 5);
+    Serial.print(",gtres");
+    Serial.print(graph_3[2], 5);
+    Serial.print(",xxx");
+    Serial.print(steps[2]);
+    Serial.print(".00,");
+    Serial.println();
+    Serial.print("DATATOGRAPH: ");
+    Serial.print(",guno");
+    Serial.print(graph_1[3], 5);
+    Serial.print(",gdos");
+    Serial.print(graph_2[3], 5);
+    Serial.print(",gtres");
+    Serial.print(graph_3[3], 5);
+    Serial.print(",xxx");
+    Serial.print(steps[3]);
+    Serial.print(".00,");
+    Serial.println();
+    Serial.print("DATATOGRAPH: ");
+    Serial.print(",guno");
+    Serial.print(graph_1[4], 5);
+    Serial.print(",gdos");
+    Serial.print(graph_2[4], 5);
+    Serial.print(",gtres");
+    Serial.print(graph_3[4], 5);
+    Serial.print(",xxx");
+    Serial.print(steps[4]);
+    Serial.print(".00,");
+    Serial.println();
+    buffer_index = 0;
+  }
+  #else
   // Serial.print(pres_0.pressure_adc);
   // Serial.print(" ");
   // Serial.print(pres_0.openpressure);
   // Serial.print(" ");
   // Serial.print(pres_0.pressure_adc);
+  Serial.print(s->cur_step);
   Serial.print(" ");
   Serial.print(flow*60, 5);
   Serial.print(" ");
@@ -576,28 +671,11 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   Serial.print(" ");
   Serial.print(m->target_vel, 4);
   Serial.print(" ");
+  Serial.print(analogRead(PIN_CURRENT_SENSE));
+  Serial.print(" ");
   Serial.print(c->t_f);
-  Serial.println();*/
-  Serial.print("DATATOGRAPH: ");
-  Serial.print("rUUuno");
-  Serial.print(volume_in, 4);
-  Serial.print(",rdos");
-  Serial.print(volume_out, 4);
-  Serial.print(",rtres");
-  Serial.print(pip, 2);
-  Serial.print(",rcuatro");
-  Serial.print(peep, 2);
-  Serial.print(",guno");
-  Serial.print(flow, 5);
-  Serial.print(",gdos");
-  Serial.print(volume, 5);
-  Serial.print(",gtres");
-  Serial.print(pres_1.pressure, 2);
-  Serial.print(",xxx");
-  Serial.print(s->cur_step);
-  Serial.print(".00,");
   Serial.println();
-
+  #endif
 }
 
 void calc_step(StepInfo *s, CurveParams *c)
@@ -753,13 +831,13 @@ void filter_motor(MotorDynamics *m)
   m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
   prev_pwm = m->output;
   
-  if(m->output > 500)
+  if(m->output > MAX_PWM)
   {
-    m->output = 500;
+    m->output = MAX_PWM;
   }
-  else if (m->output < -500)
+  else if (m->output < -MAX_PWM)
   {
-    m->output = -500;
+    m->output = -MAX_PWM;
   }
 
 }
@@ -768,7 +846,8 @@ void execute_motor(MotorDynamics *m)
 {
   if (pause)
   {
-    myservo.writeMicroseconds(1500);
+    // myservo.writeMicroseconds(1500);
+    analogWrite(PIN_PWM, 0);
     return;
   }
   else motor_write(m->output);
@@ -795,7 +874,7 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
   }
 
   motor_volts = c->kp * error_position + c->kv * error_velocity;
-  m->output = fmap(motor_volts, 0, 12, 0, 500);
+  m->output = fmap(motor_volts, 0, 12, 0, MAX_PWM);
 
 }
 
@@ -1014,8 +1093,9 @@ bool blocked_motor_protection(double ang_pos, double pwm)
 
 void motor_write(double pwm)
 {
-  
-  myservo.writeMicroseconds(1500+pwm);
+  if(pwm > 0) digitalWrite(PIN_DIR, 0);
+  else digitalWrite(PIN_DIR, 1);
+  analogWrite(PIN_PWM, abs(pwm));
 }
 
 void lcd_update(LcdVals *lcd_vals)
@@ -1047,6 +1127,7 @@ void calibrate()
     if(digitalRead(PIN_LIMIT_SWITCH))
     {
       motor_write(-MIN_VEL);
+      // motor_write(-200);
     }
     else
     {
@@ -1074,7 +1155,7 @@ void calibrate()
     if(((encoder.getPosition()<<1) - zero_position) < 0)
     {
       Serial.println((encoder.getPosition()<<1) - zero_position);
-      motor_write(MIN_VEL_2);
+      motor_write(MIN_VEL);
     }
     else
     {

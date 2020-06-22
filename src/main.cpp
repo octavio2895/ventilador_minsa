@@ -8,6 +8,7 @@
 #include <PressureSensor.h>
 
 // #define USBD_USE_CDC
+
 // Pin definitions.
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
@@ -22,18 +23,12 @@
 #define USE_FLUTTER_PRINTS
 
 // Physical constraints.
-#define ROTARYMIN             0
-#define ROTARYMAX             200
-#define ROTARYINITIAL         0
-#define ENCODER_CPR           2000
-#define MOTOR_DZ              0 //165
-#define BACKLASH_CLICKS       5
-#define PROTECTION_CLICKS     5
+#define ENCODER_CPR           8000
 #define ACCEL_1               320
 #define ACCEL_2               -20
 #define ACCEL_3               -160
 #define ACCEL_4               0.23
-#define ZERO_OFFSET           256
+#define ZERO_OFFSET           1400
 #define MIN_VEL               80
 #define MIN_VEL_2             20
 #define MAX_VOL               50
@@ -43,6 +38,10 @@
 #define MAX_X                 4
 #define MIN_X                 1
 #define MAX_PWM               256
+#define KP_MAX                300
+#define KP_MIN                80
+#define KV_MAX                50
+#define KV_MIN                0
 
 
 // Update rates.
@@ -55,18 +54,11 @@
 #define SERIAL_UPDATE_DELAY   50
 #define PRES_CAL_DELAY        100
 #define SENSOR_UDPATE_DELAY   5
-#define PLOT_UPDATE_DELAY     50
+#define PLOT_UPDATE_DELAY     15
 
 // Parameter
-#define CAL_PWM               10
-#define CAL_DRIVE_BACK_ANG    5
-#define CAL_DRIVE_ANG         0.5
-#define CAL_DZ                0.5
 #define BREATH_PAUSE          0
-#define MAX_ADC_RESOLUTION 16
-
-//Super Calibrate
-#define CAL_TICKS             5
+#define MAX_ADC_RESOLUTION    16
 
 //Experiment
 #define RISE_TIME             3000
@@ -84,20 +76,8 @@
 #define K4                    0//4
 #define K5                    150//4
 #define K6                    0//4
-#define K1_W                  35
-#define K2_W                  0//1
-//Targets times
-#define FIRST_TIME            600
-#define SECOND_TIME           2000
-#define THIRD_TIME            3000
-
-//Target degrees
-#define F_DEG                 5
-#define S_DEG                 11
-#define T_DEG                 15
 
 //Target deg/s
-#define DEG_P_SEG             8
 #define DEG_TO_RAD            PI/180
 #define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
 
@@ -106,8 +86,8 @@
 //Control encoder
 struct ControlVals 
 {
-  double kp;
-  double kv;
+  double kp[7] = {K1, K3, K5, K1, K1, K1, K1};
+  double kv[7] = {K2, K4, K6, K2, K2, K2, K2};;
 }control_vals;
 
 struct LcdVals
@@ -142,6 +122,8 @@ struct CurveParams
   double a_t = tidal_vol;
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
+  double kv[3] = {K2, K4, K6};
+  double kp[3] = {K1, K3, K5};
 
   double accel[3] = 
   {
@@ -188,48 +170,34 @@ struct PlotDat
   double cur_vel;
 }plot;
 
-// struct PressureSensor
-// {
-//   uint8_t id = 0;
-//   int16_t openpressure = 0;
-//   double pressure_adc = 0;
-//   double pressure = 0;
-// }
 PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
-
 bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
 
 // Global objects.
-RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB0);
+RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB0);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
-// Servo myservo;
 Adafruit_ADS1115 ads;
 
 // Prototypes
-void change_control_values(ControlVals *vals);
 void BlinkLED();
 void calibrate();
-void motor_set_dir(double);
 void motor_write(double);
 int16_t calculate_position();
 double calculate_angular_velocity(MotorDynamics *);
 int16_t calculate_angular_acceleration(double);
 void encoderISR();
-void mimo_control(MotorDynamics*, ControlVals*);
+void mimo_control(MotorDynamics*, ControlVals*, StepInfo*);
 double get_target_position(StepInfo*, CurveParams*);
 double get_target_velocity(StepInfo*, CurveParams*);
-void pulse_interrupt();
 void lcd_update(LcdVals *lcd_vals);
-bool backlash_protection(double);
-bool blocked_motor_protection(double, double);
 void generate_curve(StepInfo * , MotorDynamics *, CurveParams *);
 void read_motor(MotorDynamics *);
-void gain_scheduling(StepInfo *, ControlVals *);
+// void gain_scheduling(StepInfo *, ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
 void read_params(CurveParams *);
@@ -240,6 +208,7 @@ double fmap(double in, double in_min, double in_max, double out_min, double out_
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n);
 void print_curve_data(CurveParams*);
 int8_t params_check(double, double, double);
+int8_t k_check(double, double, double);
 double calculate_volume(StepInfo *, double);
 void home();
 void reset_vals();
@@ -302,9 +271,9 @@ void loop()
   {
     calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
-    gain_scheduling(&step, &control_vals);
+    // gain_scheduling(&step, &control_vals);
     generate_curve(&step, &motor_vals, &curve_vals);
-    mimo_control(&motor_vals, &control_vals);
+    mimo_control(&motor_vals, &control_vals, &step);
     filter_motor(&motor_vals);
     execute_motor(&motor_vals);
     next_motor_update = millis() + MOTOR_UPDATE_DELAY;
@@ -503,8 +472,45 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     else if (param_check_var == 6) Serial.println("Respiration ralation too low!, ignoring...");
     else Serial.println("Impossible combination, ignoring...");
   }
+  else if(!strcmp(cmd, "Kval"))
+  {
+    if (value_1 == 0 || value_2 == 0 || value_3 == 0)
+    {
+      Serial.println("Not enough values!");
+      Serial.print(value_1);
+      Serial.print(value_2);
+      Serial.print(value_3);
+      return;
+    }
+    int k_check_var = k_check(value_1, value_2, value_3);
+    if(k_check_var == 0)
+    {
+      control_vals.kp[(uint16_t)value_1] = value_2;
+      control_vals.kv[(uint16_t)value_1] = value_3;
+    }
+    else if (k_check_var == 1) Serial.println("Index out of range! Ignoring...");
+    else if (k_check_var == 2) Serial.println("No negative values allowed! Ignoring...");
+    else if (k_check_var == 3) Serial.println("KP is too high! Ignoring...");
+    else if (k_check_var == 4) Serial.println("KP is too low! Ignoring...");
+    else if (k_check_var == 5) Serial.println("KV is too high! Ignoring...");
+    else if (k_check_var == 6) Serial.println("KV is too low! Ignoring...");
+    Serial.println(control_vals.kp[(uint16_t)value_1]);
+    Serial.println(control_vals.kv[(uint16_t)value_1]);
+  }
   else Serial.println("CMD not recognized");
 }
+
+int8_t k_check(double stage, double kp, double kv)
+{
+  if(stage >= (sizeof(control_vals.kp)/sizeof(control_vals.kp[0]))) return 1;
+  if(stage < 0 || kp < 0 || kv < 0) return 2;
+  if(kp > KP_MAX) return 3;
+  if(kp < KP_MIN) return 4;
+  if(kv > KV_MAX) return 5;
+  if(kv < KV_MIN) return 6;
+  else return 0;
+}
+
 
 int8_t params_check(double rr, double x, double tidal_vol)
 {
@@ -566,16 +572,30 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   // if(!plot_flag) return;
   #ifdef USE_FLUTTER_PRINTS
   static int16_t buffer_index = 0;
-  static double graph_1[5];
-  static double graph_2[5];
-  static double graph_3[5];
-  static uint32_t steps[5];
+  static double graph_1[10];
+  static double graph_2[10];
+  static double graph_3[10];
+  static uint32_t steps[10];
   graph_1[buffer_index] = m->current_ang_pos;
-  graph_2[buffer_index] = m->target_pos;
+  graph_2[buffer_index] = pres_0.pressure_adc;
   graph_3[buffer_index] = m->current_vel;
   steps[buffer_index] = s->cur_step;
-  if (buffer_index++ == 4)
+  if (buffer_index++ == 9)
   {
+    for(int i = 0; i<(sizeof(steps)/sizeof(steps[0])); i++)
+    {
+      Serial.print("DATATOGRAPH: ");
+      Serial.print("guno");
+      Serial.print(graph_1[i], 5);
+      Serial.print(",gdos");
+      Serial.print(graph_2[i], 5);
+      Serial.print(",gtres");
+      Serial.print(graph_3[i], 5);
+      Serial.print(",xxx");
+      Serial.print(steps[i]);
+      Serial.print(".00,");
+      Serial.println();
+    }
     Serial.print("DATATOGRAPH: ");
     Serial.print("rUUuno");
     Serial.print(volume_in, 4);
@@ -584,61 +604,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
     Serial.print(",rtres");
     Serial.print(pip, 2);
     Serial.print(",rcuatro");
-    Serial.print(peep, 2);
-    Serial.print(",guno");
-    Serial.print(graph_1[0], 5);
-    Serial.print(",gdos");
-    Serial.print(graph_2[0], 5);
-    Serial.print(",gtres");
-    Serial.print(graph_3[0], 5);
-    Serial.print(",xxx");
-    Serial.print(steps[0]);
-    Serial.print(".00,");
-    Serial.println();
-    Serial.print("DATATOGRAPH: ");
-    Serial.print(",guno");
-    Serial.print(graph_1[1], 5);
-    Serial.print(",gdos");
-    Serial.print(graph_2[1], 5);
-    Serial.print(",gtres");
-    Serial.print(graph_3[1], 5);
-    Serial.print(",xxx");
-    Serial.print(steps[1]);
-    Serial.print(".00,");
-    Serial.println();
-    Serial.print("DATATOGRAPH: ");
-    Serial.print(",guno");
-    Serial.print(graph_1[2], 5);
-    Serial.print(",gdos");
-    Serial.print(graph_2[2], 5);
-    Serial.print(",gtres");
-    Serial.print(graph_3[2], 5);
-    Serial.print(",xxx");
-    Serial.print(steps[2]);
-    Serial.print(".00,");
-    Serial.println();
-    Serial.print("DATATOGRAPH: ");
-    Serial.print(",guno");
-    Serial.print(graph_1[3], 5);
-    Serial.print(",gdos");
-    Serial.print(graph_2[3], 5);
-    Serial.print(",gtres");
-    Serial.print(graph_3[3], 5);
-    Serial.print(",xxx");
-    Serial.print(steps[3]);
-    Serial.print(".00,");
-    Serial.println();
-    Serial.print("DATATOGRAPH: ");
-    Serial.print(",guno");
-    Serial.print(graph_1[4], 5);
-    Serial.print(",gdos");
-    Serial.print(graph_2[4], 5);
-    Serial.print(",gtres");
-    Serial.print(graph_3[4], 5);
-    Serial.print(",xxx");
-    Serial.print(steps[4]);
-    Serial.print(".00,");
-    Serial.println();
+    Serial.println(peep, 2);
     buffer_index = 0;
   }
   #else
@@ -646,7 +612,8 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   // Serial.print(" ");
   // Serial.print(pres_0.openpressure);
   // Serial.print(" ");
-  // Serial.print(pres_0.pressure_adc);
+  Serial.print(pres_0.pressure_adc);
+  Serial.print(" ");
   Serial.print(s->cur_step);
   Serial.print(" ");
   Serial.print(flow*60, 5);
@@ -786,45 +753,6 @@ void read_motor(MotorDynamics *m)
   m->current_vel = calculate_angular_velocity(m);
 }
 
-void gain_scheduling(StepInfo *s, ControlVals *c)
-{
-  if(s->cur_stage == INS_1)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-  else if(s->cur_stage == INS_2)
-  {
-    c->kp = K3;
-    c->kv = K4;
-  }
-  else if(s->cur_stage == INS_3)
-  {
-    c->kp = K5;
-    c->kv = K6;
-  }
-  else if(s->cur_stage == REST_1)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-  else if(s->cur_stage == EXP_1)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-  else if(s->cur_stage == EXP_2)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-  else if(s->cur_stage == REST_2)
-  {
-    c->kp = K1;
-    c->kv = K2;
-  }
-}
-
 void filter_motor(MotorDynamics *m)
 {
   static double prev_pwm;
@@ -853,7 +781,7 @@ void execute_motor(MotorDynamics *m)
   else motor_write(m->output);
 }
 
-void mimo_control(MotorDynamics *m, ControlVals *c)
+void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
 {
   static double error_position;
   static double error_velocity;
@@ -873,7 +801,7 @@ void mimo_control(MotorDynamics *m, ControlVals *c)
     error_position = -0.8;
   }
 
-  motor_volts = c->kp * error_position + c->kv * error_velocity;
+  motor_volts = c->kp[s->cur_stage] * error_position + c->kv[s->cur_stage] * error_velocity;
   m->output = fmap(motor_volts, 0, 12, 0, MAX_PWM);
 
 }
@@ -993,102 +921,6 @@ int16_t calculate_angular_acceleration(double ang_vel)
   int16_t acceleration = (ang_vel - prev_velocity)/MOTOR_UPDATE_DELAY;
   prev_velocity = ang_vel;
   return acceleration;
-}
-
-bool backlash_protection(double vel)
-{
-  static bool prev_dir, dir_change_flag;
-  static int16_t backlash_init, backlash_end;
-  if (vel > 0) dir = 1;
-  else dir = 0;
-  Serial.print("DIR: ");
-  Serial.println(dir);
-  if (prev_dir != dir)
-  {
-    prev_dir = dir;
-    Serial.println("Dir change");
-    dir_change_flag = 1;
-    backlash_init = encoder.getPosition();
-    if(dir)
-    {
-      backlash_end = backlash_init + BACKLASH_CLICKS;
-      motor_write(100);
-      Serial.println("Writting 100 to motor");
-      Serial.print("Backlash end: ");
-      Serial.println(backlash_end);
-      return false;
-    }
-    else 
-    {
-      backlash_end = backlash_init - BACKLASH_CLICKS;
-      Serial.println("Writting -100 to motor");
-      Serial.print("Backlash end: ");
-      Serial.println(backlash_end);
-      motor_write(-100);
-      return false;
-    }
-  }
-
-  if (dir_change_flag && ((dir && encoder.getPosition() > backlash_end) || !dir && encoder.getPosition() < backlash_end)) 
-  {
-    dir_change_flag = false;
-    return true;
-  }
-
-  else if (dir_change_flag == 0)
-  {
-    Serial.println("No changes: ");
-    // Serial.print("Dir: ");
-    // Serial.println(dir);
-    return true;
-  }
-
-  else
-  {
-    Serial.println((encoder.getPosition() - backlash_end));
-    return false;
-  }
-}
-
-bool blocked_motor_protection(double ang_pos, double pwm)
-{
-  static double prev_ang_pos;
-  static bool prev_dir;
-
-  if (pwm > 0 /*&& prev_dir*/)
-  {
-    prev_dir = 1;
-    if(ang_pos > (prev_ang_pos + PROTECTION_CLICKS)) 
-    {
-      prev_ang_pos = ang_pos;
-      return true;
-    }
-    else 
-    {
-      prev_ang_pos = ang_pos;
-      Serial.println("Blocked motor on positive movement");
-      pwm = 0;
-      return false;
-    }
-  }
-  if(pwm < 0 /*&& !prev_dir*/)
-  {
-    Serial.println("Newgative");
-   prev_dir = 0;
-    if(ang_pos < (prev_ang_pos - PROTECTION_CLICKS)) 
-    {
-      prev_ang_pos = ang_pos;
-      return true;
-    }
-    else
-    {
-      prev_ang_pos = ang_pos;
-      Serial.println("Blocked motor on negative movement");
-      pwm = 0;
-      return false;
-    }
-  }
-  return true;
 }
 
 void motor_write(double pwm)

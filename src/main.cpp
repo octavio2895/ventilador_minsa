@@ -61,12 +61,6 @@
 #define MAX_ADC_RESOLUTION    16
 
 //Experiment
-#define RISE_TIME             3000
-#define DEAD_TIME             0//1000
-#define FALL_TIME             2000
-#define WAITING_TIME          2000
-#define ACC_TIME              800
-#define DEGREES               360
 #define FILTER                0
 #define FILTER_PWM            0
 
@@ -112,10 +106,6 @@ struct MotorDynamics
 
 struct CurveParams
 {
-  double const_vel_time_rise = RISE_TIME - 2*ACC_TIME;
-  double const_vel_time_fall = FALL_TIME - 2*ACC_TIME;
-  double theta_dot_max_rise = DEGREES/(const_vel_time_rise+ACC_TIME);
-  double theta_dot_max_fall = 36/10;
   double rr = 15;
   double x = 1;
   double tidal_vol = 42;
@@ -230,11 +220,10 @@ void setup()
   analogWriteFrequency(20000);
   analogWrite(PIN_PWM, 128);
   Serial.begin(115200);
-  // myservo.attach(PIN_PWM, 1000, 2000);
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
-  // calibrate_pressure_sensor(&pres_0);
+  // calibrate_pressure_sensor(&pres_0); // TODO: Review this
   // calibrate_pressure_sensor(&pres_1);
   pres_0.openpressure = 253;
   pres_1.openpressure = 13;
@@ -271,7 +260,6 @@ void loop()
   {
     calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
-    // gain_scheduling(&step, &control_vals);
     generate_curve(&step, &motor_vals, &curve_vals);
     mimo_control(&motor_vals, &control_vals, &step);
     filter_motor(&motor_vals);
@@ -292,7 +280,6 @@ void loop()
     {
       first_run = true;
       reset_flag = 0;
-  // myservo.attach(PIN_PWM, 1000, 2000);
       pause = true;
     }
   }
@@ -363,8 +350,6 @@ double calculate_volume(StepInfo *s, double flow)
     Serial.print(" ");
     Serial.println(volume_out, 5);
   }
-  // if(s->cur_stage == EXP_1 || s->cur_stage == EXP_2 || s->cur_stage == REST_2) volume = volume - (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
-  // else volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
   volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
@@ -375,7 +360,6 @@ double calculate_volume(StepInfo *s, double flow)
 
   else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
   {
-    // Serial.println("Volume out!");
     volume_out = volume_in - volume;
     pres_0.openpressure = arr_average(open_pressure_adc, 16);
     peep = arr_average(exp_press, 16);
@@ -569,7 +553,6 @@ void print_curve_data(CurveParams *c)
 
 void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
 {
-  // if(!plot_flag) return;
   #ifdef USE_FLUTTER_PRINTS
   static int16_t buffer_index = 0;
   static double graph_1[10];
@@ -756,7 +739,7 @@ void read_motor(MotorDynamics *m)
 void filter_motor(MotorDynamics *m)
 {
   static double prev_pwm;
-  m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1);
+  m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1); // TODO: Review this
   prev_pwm = m->output;
   
   if(m->output > MAX_PWM)
@@ -774,7 +757,6 @@ void execute_motor(MotorDynamics *m)
 {
   if (pause)
   {
-    // myservo.writeMicroseconds(1500);
     analogWrite(PIN_PWM, 0);
     return;
   }
@@ -792,7 +774,7 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   error_velocity = m->target_vel - m->current_vel;
 
   //Error protection
-  if (error_position > 0.8)
+  if (error_position > 0.8) // TODO: Review error protection
   {
     error_position = 0.8;
   }
@@ -886,7 +868,7 @@ double calculate_angular_velocity(MotorDynamics *m)
   return velocity;
 }
 
-double calculate_angular_velocity_fod3(MotorDynamics *m)
+double calculate_angular_velocity_fod3(MotorDynamics *m) // TODO: Review first order differential approximation
 {
   static uint8_t index = 0, stage = 0;
   static double prev_angular_position, prev_velocity;
@@ -959,7 +941,6 @@ void calibrate()
     if(digitalRead(PIN_LIMIT_SWITCH))
     {
       motor_write(-MIN_VEL);
-      // motor_write(-200);
     }
     else
     {

@@ -31,7 +31,7 @@ void read_pressure_2(PressureSensor *p)
   adc[i] = abs(ads.readADC_Differential_2_3());
   p->pressure_adc = arr_average(adc, 16);
   if(p->pressure_adc <= (double)(p->openpressure+1)) p->pressure_adc = (double)p->openpressure;
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * .73903);
+  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER_2 * 1.25* 10.1972); // cmH2O
   i++;
 }
 

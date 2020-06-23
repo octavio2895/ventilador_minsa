@@ -30,8 +30,8 @@
 #define ACCEL_3               -160
 #define ACCEL_4               0.23
 #define MAX_ACCEL             320
-#define ZERO_OFFSET           1400
-#define MIN_VEL               80
+#define ZERO_OFFSET           1000
+#define MIN_VEL               60
 #define MAX_VOL               50
 #define MIN_VOL               0
 #define MAX_RR                40
@@ -43,6 +43,8 @@
 #define KP_MIN                80
 #define KV_MAX                50
 #define KV_MIN                0
+#define CURRENT_COLLISION_THRESHOLD                200
+#define AMBU_OPEN_ANGLE       55
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -74,6 +76,7 @@
 //Target deg/s
 #define DEG_TO_RAD            PI/180
 #define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
+#define RAD_TO_CLICK          (ENCODER_CPR/2*PI)
 
 //Control encoder
 struct ControlVals 
@@ -161,7 +164,7 @@ struct PlotDat
 PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
-bool cal_flag = false, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
+bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
@@ -200,6 +203,7 @@ double calculate_volume(StepInfo *, double);
 void home();
 void reset_vals();
 void get_accels(CurveParams*, double, double, double);
+void hard_calibrate();
 
 void setup()
 {
@@ -231,6 +235,7 @@ void loop()
 {
   BlinkLED();
   if(!cal_flag) calibrate();
+  if(!h_cal_flag) hard_calibrate();
 
   if (millis() > next_sensor_update)
   {
@@ -346,6 +351,12 @@ double calculate_volume(StepInfo *s, double flow)
     Serial.print(pip, 5);
     Serial.print(" ");
     Serial.println(volume_out, 5);
+    #ifdef USE_FLUTTER_PRINTS
+    Serial.print("DATATOGRAPH: ");
+    Serial.print("glen");
+    Serial.print(curve_vals.t_f);
+    Serial.println(",");
+    #endif
   }
   volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
@@ -416,7 +427,13 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   }
   else if(!strcmp(cmd, "CAL"))
   {
+    h_cal_flag = 1;
     cal_flag = 0;
+  }
+  else if(!strcmp(cmd, "HCAL"))
+  {
+    cal_flag = 1;
+    h_cal_flag = 0;
   }
   else if(!strcmp(cmd, "PLOT"))
   {
@@ -574,7 +591,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   static uint32_t steps[10];
   graph_1[buffer_index] = volume;
   graph_2[buffer_index] = flow;
-  graph_3[buffer_index] = m->current_vel;
+  graph_3[buffer_index] = pres_1.pressure;
   steps[buffer_index] = s->cur_step;
   if (buffer_index++ == 9)
   {
@@ -993,6 +1010,87 @@ void calibrate()
   case 5:
     Serial.println(" Done!");
     cal_flag = 1;
+    state = 0;
+    break;
+  default:
+    break;
+  }
+}
+
+void hard_calibrate()
+{
+  static uint8_t state = 0;
+  static uint16_t stopped_millis = 0;
+
+  switch (state)
+  {
+  case 0:
+    pause = 1;
+    Serial.println("Performing hard calibration...");
+    state++;
+    break;
+  case 1:
+    if(digitalRead(PIN_LIMIT_SWITCH))
+    {
+      motor_write(-MIN_VEL);
+    }
+    else
+    {
+      state++;
+      motor_write(0);
+    }
+    break;
+  case 2:
+    Serial.println(" Done!");
+    Serial.println(encoder.getPosition()<<1);
+    encoder.setPosition(0);
+    // zero_position = (encoder.getPosition()<<1) + ZERO_OFFSET;
+    // Serial.println(zero_position);
+    stopped_millis = millis() + 5000;
+    state++;
+    break;
+  case 3:
+    if(millis() > stopped_millis) 
+    {
+      Serial.print("Going to upper limit...");
+      state++;
+    }
+    break;
+  case 4:
+  {
+    uint32_t current_adc = analogRead(PIN_CURRENT_SENSE);
+    if(current_adc < CURRENT_COLLISION_THRESHOLD)
+    {
+      Serial.println((encoder.getPosition()<<1) - zero_position);
+      Serial.println(current_adc);
+      motor_write(MIN_VEL);
+    }
+    else
+    {
+      motor_write(0);
+      state++;
+      Serial.print("Upper limit: ");
+      Serial.println(encoder.getPosition());
+      zero_position = encoder.getPosition() - AMBU_OPEN_ANGLE*DEG_TO_RAD*RAD_TO_CLICK;
+      Serial.println("Going to zero...");
+    }
+    break;
+  }
+  case 5:
+    if(((encoder.getPosition()<<1) - zero_position) > 0)
+    {
+      Serial.println((encoder.getPosition()<<1) - zero_position);
+      motor_write(-MIN_VEL);
+    }
+    else
+    {
+      state++;
+      motor_write(0);
+    }
+    break;
+  case 6:
+    Serial.println(" Done!");
+    h_cal_flag = 1;
     state = 0;
     break;
   default:

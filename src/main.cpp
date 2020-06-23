@@ -8,6 +8,7 @@
 #include <PressureSensor.h>
 
 // #define USBD_USE_CDC
+// #define SCREEN
 
 // Pin definitions.
 #define PIN_ENCODER_A         PA7
@@ -28,9 +29,9 @@
 #define ACCEL_2               -20
 #define ACCEL_3               -160
 #define ACCEL_4               0.23
+#define MAX_ACCEL             320
 #define ZERO_OFFSET           1400
 #define MIN_VEL               80
-#define MIN_VEL_2             20
 #define MAX_VOL               50
 #define MIN_VOL               0
 #define MAX_RR                40
@@ -42,7 +43,6 @@
 #define KP_MIN                80
 #define KV_MAX                50
 #define KV_MIN                0
-
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -74,8 +74,6 @@
 //Target deg/s
 #define DEG_TO_RAD            PI/180
 #define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
-
-// #define SCREEN
 
 //Control encoder
 struct ControlVals 
@@ -187,7 +185,6 @@ double get_target_velocity(StepInfo*, CurveParams*);
 void lcd_update(LcdVals *lcd_vals);
 void generate_curve(StepInfo * , MotorDynamics *, CurveParams *);
 void read_motor(MotorDynamics *);
-// void gain_scheduling(StepInfo *, ControlVals *);
 void execute_motor(MotorDynamics *);
 void filter_motor(MotorDynamics *);
 void read_params(CurveParams *);
@@ -498,17 +495,18 @@ int8_t k_check(double stage, double kp, double kv)
 
 int8_t params_check(double rr, double x, double tidal_vol)
 {
-  uint32_t t_f = 60000/rr;
-  uint32_t t_d = t_f/(x+1);
   if(tidal_vol > MAX_VOL) return 1;
   if(tidal_vol<MIN_VOL) return 2;
   if(rr>MAX_RR) return 3;
   if(rr<MIN_RR) return 4;
   if(x>MAX_X) return 5;
   if(x<MIN_X) return 6;
-  if(tidal_vol > (-0.5*ACCEL_1*ACCEL_3*((double)t_d/1000)*((double)t_d/1000)/(ACCEL_1-ACCEL_3))) return 7;
-  if(t_d > 1000*sqrt((-2*tidal_vol*(ACCEL_1 - ACCEL_2))/(ACCEL_1*ACCEL_2))) return 8;
-  return false;
+  double min_accel = rr*rr*tidal_vol*(x+1)*(x+1)/600;
+  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800;
+  if(min_accel > MAX_ACCEL) return 7;
+  if(max_accel < curve_vals.accel[0] && min_accel < curve_vals.accel[0]) return 0; // Could be run without modifying acceleration.
+  else return 8; // Could be done by modifying acceleration.
+  return -1; // Should never get here
 }
 
 void print_curve_data(CurveParams *c)

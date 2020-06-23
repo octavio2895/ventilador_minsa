@@ -5,20 +5,22 @@
 #include "WProgram.h"
 #endif
 
-double calculate_flow(PressureSensor *p)
+double calculate_flow_venturi(PressureSensor *p)
 {
   return (VENTURI_BIG_AREA*1000*(sqrt((2 * abs(p->pressure)) / (AIR_DENSITY * ((SQ_AREA_RATIO)-1)))));
 }
 
+double calculate_flow_oplate(PressureSensor *p)
+{
+  if(p->pressure > 0) return (sqrt(abs(p->pressure)/Y0));
+  else return (-sqrt(abs(p->pressure)/Y0));
+}
+
+
 void read_pressure(PressureSensor *p)
 {
-  static int16_t adc[8];
-  static int16_t i = 0;
-  if(i>7)i = 0;
-  adc[i] = analogRead(A0);
-  p->pressure_adc = arr_average(adc, 8);
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 2000);
-  i++;
+  p->pressure_adc = analogRead(A0);
+  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 2.222);
 }
 
 void read_pressure_2(PressureSensor *p)

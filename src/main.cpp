@@ -199,6 +199,7 @@ int8_t k_check(double, double, double);
 double calculate_volume(StepInfo *, double);
 void home();
 void reset_vals();
+void get_accels(CurveParams*, double, double, double);
 
 void setup()
 {
@@ -231,12 +232,11 @@ void loop()
   BlinkLED();
   if(!cal_flag) calibrate();
 
-  if (!pause && cal_flag && millis() > next_sensor_update)
+  if (millis() > next_sensor_update)
   {
     read_pressure(&pres_0);
     read_pressure_2(&pres_1);
-    if(step.cur_stage >= REST_1) flow = -calculate_flow(&pres_0);
-    else flow = calculate_flow(&pres_0);
+    flow = calculate_flow_oplate(&pres_0);
     volume = calculate_volume(&step, flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
@@ -350,7 +350,7 @@ double calculate_volume(StepInfo *s, double flow)
   volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
-    max_angle = abs(((encoder.getPosition()<<1) - zero_position)*RAD_TO_DEG*CLICKS_TO_RAD);
+    max_angle = abs(((encoder.getPosition()<<1) - init_angle)*RAD_TO_DEG*CLICKS_TO_RAD);
     pip = arr_top(top_pres, 64);
     volume_in = volume;
   }
@@ -360,7 +360,7 @@ double calculate_volume(StepInfo *s, double flow)
     volume_out = volume_in - volume;
     pres_0.openpressure = arr_average(open_pressure_adc, 16);
     peep = arr_average(exp_press, 16);
-    init_angle = ((encoder.getPosition()<<1)-zero_position)*CLICKS_TO_RAD*RAD_TO_DEG;
+    init_angle = (encoder.getPosition()<<1);
   }
 
   if(s->cur_stage == INS_3)
@@ -440,6 +440,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     int param_check_var = params_check(value_1, value_2, value_3);
     if(param_check_var == 0)
     {
+      get_accels(n, value_1, value_2, value_3);
       n->rr = value_1;
       n->x = value_2;
       n->tidal_vol = value_3;
@@ -481,6 +482,15 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   else Serial.println("CMD not recognized");
 }
 
+void get_accels(CurveParams *c, double rr, double x, double tidal_vol)
+{
+  double min_accel = rr*rr*tidal_vol*(x+1)*(x+1)/600; // TODO: redoing this calculation, this should be optimized.
+  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800;
+  c->accel[0] = max_accel > MAX_ACCEL ? (MAX_ACCEL + min_accel)/2 : (max_accel + min_accel)/2;
+  c->accel[1] = -c->accel[0]/16;
+  c->accel[2] = -c->accel[0]/2;
+}
+
 int8_t k_check(double stage, double kp, double kv)
 {
   if(stage >= (sizeof(control_vals.kp)/sizeof(control_vals.kp[0]))) return 1;
@@ -502,10 +512,9 @@ int8_t params_check(double rr, double x, double tidal_vol)
   if(x>MAX_X) return 5;
   if(x<MIN_X) return 6;
   double min_accel = rr*rr*tidal_vol*(x+1)*(x+1)/600;
-  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800;
-  if(min_accel > MAX_ACCEL) return 7;
-  if(max_accel < curve_vals.accel[0] && min_accel < curve_vals.accel[0]) return 0; // Could be run without modifying acceleration.
-  else return 8; // Could be done by modifying acceleration.
+  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800; // Actually, its just 5.666*min_accel. That probably depends on the constrain that m2 = -m1/16 and m3 = -m1/2.
+  if(min_accel > MAX_ACCEL) return 7; // Cannot be run.
+  else return 0; // Could be done by modifying acceleration.
   return -1; // Should never get here
 }
 
@@ -547,6 +556,12 @@ void print_curve_data(CurveParams *c)
     if(i<=6) Serial.print(", ");
   }
   Serial.println();
+  Serial.print("Accels: ");
+  Serial.print(c->accel[0]);
+  Serial.print(", ");
+  Serial.print(c->accel[1]);
+  Serial.print(", ");
+  Serial.println(c->accel[2]);
 }
 
 void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
@@ -557,8 +572,8 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   static double graph_2[10];
   static double graph_3[10];
   static uint32_t steps[10];
-  graph_1[buffer_index] = m->current_ang_pos;
-  graph_2[buffer_index] = pres_0.pressure_adc;
+  graph_1[buffer_index] = volume;
+  graph_2[buffer_index] = flow;
   graph_3[buffer_index] = m->current_vel;
   steps[buffer_index] = s->cur_step;
   if (buffer_index++ == 9)
@@ -593,8 +608,6 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   // Serial.print(" ");
   // Serial.print(pres_0.openpressure);
   // Serial.print(" ");
-  Serial.print(pres_0.pressure_adc);
-  Serial.print(" ");
   Serial.print(s->cur_step);
   Serial.print(" ");
   Serial.print(flow*60, 5);
@@ -678,6 +691,9 @@ void update_params(StepInfo *s, CurveParams *c, CurveParams *n)
     c->a_t = c->tidal_vol;
     c->t_f = 60000/c->rr;
     c->t_d = c->t_f/(c->x+1);
+    c->accel[0] = n->accel[0];
+    c->accel[1] = n->accel[1];
+    c->accel[2] = n->accel[2];
     init = 0;
     params_change_flag = 0;
   }

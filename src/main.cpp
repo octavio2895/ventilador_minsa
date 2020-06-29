@@ -2,7 +2,6 @@
 #include <RotaryEncoder.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-#include <Servo.h>
 #include <math.h>
 #include <Adafruit_ADS1015.h>
 #include <PressureSensor.h>
@@ -14,12 +13,12 @@
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
 #define PIN_PWM               PA15
-#define PIN_DIR               PB1
-#define PIN_CURRENT_SENSE     PB0
+#define PIN_DIR               PB0
+#define PIN_CURRENT_SENSE     PB1
 #define PIN_LIMIT_SWITCH      PA8
 
-#define FORWARD_LOGIC         0
-#define BACKWARD_LOGIC        1
+#define FORWARD_LOGIC         1
+#define BACKWARD_LOGIC        0
 
 #define USE_FLUTTER_PRINTS
 
@@ -28,11 +27,10 @@
 #define ACCEL_1               320
 #define ACCEL_2               -20
 #define ACCEL_3               -160
-#define ACCEL_4               0.23
-#define MAX_ACCEL             320
+#define MAX_ACCEL             700
 #define ZERO_OFFSET           1000
 #define MIN_VEL               60
-#define MAX_VOL               50
+#define MAX_VOL               55
 #define MIN_VOL               0
 #define MAX_RR                40
 #define MIN_RR                0
@@ -40,7 +38,7 @@
 #define MIN_X                 1
 #define MAX_PWM               256
 #define KP_MAX                300
-#define KP_MIN                80
+#define KP_MIN                0
 #define KV_MAX                50
 #define KV_MIN                0
 #define CURRENT_COLLISION_THRESHOLD                200
@@ -164,13 +162,15 @@ struct PlotDat
 PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
+double y_0 = 0.62;
 bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
+bool plot_enable = 0, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
 
 // Global objects.
-RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB0);
+RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 Adafruit_ADS1115 ads;
 
@@ -210,7 +210,8 @@ void setup()
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PIN_LIMIT_SWITCH, INPUT_PULLUP);
   pinMode(PIN_PWM, OUTPUT_OPEN_DRAIN);
-  pinMode(PIN_DIR, OUTPUT);
+  pinMode(PIN_DIR, OUTPUT_OPEN_DRAIN);
+  digitalWrite(PIN_PWM, 0);
   encoder.begin();
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
   attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
@@ -220,15 +221,16 @@ void setup()
   #endif
   analogReadResolution(12);
   analogWriteFrequency(20000);
-  analogWrite(PIN_PWM, 128);
   Serial.begin(115200);
   Serial.println("Booting up...");
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
+  ads.setSPS(ADS1115_DR_860SPS); 
   // calibrate_pressure_sensor(&pres_0); // TODO: Review this
-  // calibrate_pressure_sensor(&pres_1);
-  pres_0.openpressure = 253;
-  pres_1.openpressure = 13;
+  calibrate_pressure_sensor(&pres_1);
+  pres_0.openpressure = 256;
+  Serial.println("Done!");
+  // pres_1.openpressure = 13;
 }
 
 void loop() 
@@ -237,7 +239,7 @@ void loop()
   if(!cal_flag) calibrate();
   if(!h_cal_flag) hard_calibrate();
 
-  if (millis() > next_sensor_update)
+  if (sensor_update_enable && millis() > next_sensor_update)
   {
     read_pressure(&pres_0);
     read_pressure_2(&pres_1);
@@ -246,19 +248,19 @@ void loop()
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
 
-  if(millis()>next_params_update || params_change_flag)
+  if(params_update_enable && (millis()>next_params_update || params_change_flag))
   {
     update_params(&step, &curve_vals, &new_vals);
     next_params_update = millis() + PARAMS_UPDATE_DELAY;
   }
 
-  if(millis()>next_plot_update && plot_flag)
+  if(plot_enable && millis()>next_plot_update)
   {
     plot_data(&step, &curve_vals, &motor_vals);
     next_plot_update = millis() + PLOT_UPDATE_DELAY;
   }
 
-  if(millis()>next_motor_update && !stop_flag && cal_flag)
+  if(motor_control_enable && millis()>next_motor_update && !stop_flag && cal_flag)
   {
     calc_step(&step, &curve_vals);
     read_motor(&motor_vals);
@@ -327,7 +329,7 @@ void home()
   else if (encoder.getPosition()<<1 < zero_position) motor_write(50);
 }
 
-double calculate_volume(StepInfo *s, double flow)
+double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machine
 {
   static Stages prev_stage = INS_1;
   static double volume = 0;
@@ -344,6 +346,12 @@ double calculate_volume(StepInfo *s, double flow)
   if(prev_stage != INS_1 && s->cur_stage == INS_1)
   {
     volume = 0; //Resets volume to avoid drifting.
+    #ifdef USE_FLUTTER_PRINTS
+    Serial.print("DATATOGRAPH: ");
+    Serial.print("glen");
+    Serial.print(curve_vals.t_f);
+    Serial.println(",");
+    #else
     Serial.print(max_angle, 5);
     Serial.print(" ");
     Serial.print(volume_in, 5);
@@ -351,25 +359,21 @@ double calculate_volume(StepInfo *s, double flow)
     Serial.print(pip, 5);
     Serial.print(" ");
     Serial.println(volume_out, 5);
-    #ifdef USE_FLUTTER_PRINTS
-    Serial.print("DATATOGRAPH: ");
-    Serial.print("glen");
-    Serial.print(curve_vals.t_f);
-    Serial.println(",");
     #endif
   }
-  volume = volume + (((prev_flow+flow)/2)*(millis() - prev_millis)/1000);
+  volume = volume + (flow*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
-    max_angle = abs(((encoder.getPosition()<<1) - init_angle)*RAD_TO_DEG*CLICKS_TO_RAD);
+    max_angle = CLICKS_TO_RAD*RAD_TO_DEG*((encoder.getPosition()<<1) - init_angle);
     pip = arr_top(top_pres, 64);
+    memset(top_pres, 0, sizeof(top_pres));
     volume_in = volume;
   }
 
   else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
   {
     volume_out = volume_in - volume;
-    pres_0.openpressure = arr_average(open_pressure_adc, 16);
+    pres_0.openpressure = arr_average(open_pressure_adc, 8);
     peep = arr_average(exp_press, 16);
     init_angle = (encoder.getPosition()<<1);
   }
@@ -382,14 +386,14 @@ double calculate_volume(StepInfo *s, double flow)
 
   if(s->cur_stage == REST_2)
   {
-    if(open_pressure_index > 15) open_pressure_index = 0;
+    if(open_pressure_index > 7) open_pressure_index = 0;
     exp_press[open_pressure_index] = (int16_t)pres_1.pressure;
     open_pressure_adc[open_pressure_index++] = (int16_t)pres_0.pressure_adc;
   }
   prev_millis = millis();
   prev_stage = s->cur_stage;
   prev_flow = flow;
-  memset(top_pres, 0, sizeof(top_pres));
+  
   return volume;
 }
 
@@ -437,7 +441,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   }
   else if(!strcmp(cmd, "PLOT"))
   {
-    plot_flag = !plot_flag;
+    plot_enable = !plot_enable;
   }
   else if(!strcmp(cmd, "PRINTP"))
   {
@@ -457,6 +461,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     int param_check_var = params_check(value_1, value_2, value_3);
     if(param_check_var == 0)
     {
+      Serial.println("Combination accepted!");
       get_accels(n, value_1, value_2, value_3);
       n->rr = value_1;
       n->x = value_2;
@@ -465,15 +470,15 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     }
     else if (param_check_var == 1) Serial.println("Tidal volume too high! Ignoring...");
     else if (param_check_var == 2) Serial.println("Tidal volume too low! Ignoring...");
-    else if (param_check_var == 3) Serial.println("Respiration rate too high!, ignoring...");
-    else if (param_check_var == 4) Serial.println("Respiration rate too low!, ignoring...");
-    else if (param_check_var == 5) Serial.println("Respiration relation too high!, ignoring...");
-    else if (param_check_var == 6) Serial.println("Respiration ralation too low!, ignoring...");
-    else Serial.println("Impossible combination, ignoring...");
+    else if (param_check_var == 3) Serial.println("Respiration rate too high! Ignoring...");
+    else if (param_check_var == 4) Serial.println("Respiration rate too low! Ignoring...");
+    else if (param_check_var == 5) Serial.println("Respiration relation too high! Ignoring...");
+    else if (param_check_var == 6) Serial.println("Respiration ralation too low! Ignoring...");
+    else Serial.println("Impossible combination! Ignoring...");
   }
   else if(!strcmp(cmd, "Kval"))
   {
-    if (value_1 == 0 || value_2 == 0 || value_3 == 0)
+    if (value_2 == 0 || value_3 == 0)
     {
       Serial.println("Not enough values!");
       Serial.print(value_1);
@@ -495,6 +500,18 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     else if (k_check_var == 6) Serial.println("KV is too low! Ignoring...");
     Serial.println(control_vals.kp[(uint16_t)value_1]);
     Serial.println(control_vals.kv[(uint16_t)value_1]);
+  }
+
+  else if(!strcmp(cmd, "Y0")) // This tunes the flow sensor to match testing equiptment
+  {
+    Serial.println(u_value_1);
+    if (u_value_1 <= 0)
+    {
+      Serial.println("Value must be above 0.");
+      return;
+    }
+    y_0 = (double)u_value_1 / 10000;
+    Serial.println(y_0);
   }
   else Serial.println("CMD not recognized");
 }
@@ -538,11 +555,11 @@ int8_t params_check(double rr, double x, double tidal_vol)
 void print_curve_data(CurveParams *c)
 {
   Serial.print("RR: ");
-  Serial.print(c->rr);
+  Serial.print(c->rr,0);
   Serial.print(" X: ");
-  Serial.print(c->x);
+  Serial.print(c->x,0);
   Serial.print(" Tidal Vol: ");
-  Serial.println(c->tidal_vol);
+  Serial.println(c->tidal_vol, 0);
   Serial.print("Timming --> ");
   for(int i=0; i<7; i++)
   {
@@ -588,17 +605,21 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   static double graph_1[10];
   static double graph_2[10];
   static double graph_3[10];
+  static uint32_t cycle_buf[10];
   static uint32_t steps[10];
   graph_1[buffer_index] = volume;
-  graph_2[buffer_index] = flow;
+  graph_2[buffer_index] = flow*60;
   graph_3[buffer_index] = pres_1.pressure;
+  cycle_buf[buffer_index] = cycle;
   steps[buffer_index] = s->cur_step;
   if (buffer_index++ == 9)
   {
     for(int i = 0; i<(sizeof(steps)/sizeof(steps[0])); i++)
     {
       Serial.print("DATATOGRAPH: ");
-      Serial.print("guno");
+      Serial.print("cycle");
+      Serial.print(cycle_buf[i]);
+      Serial.print(",guno");
       Serial.print(graph_1[i], 5);
       Serial.print(",gdos");
       Serial.print(graph_2[i], 5);
@@ -606,7 +627,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
       Serial.print(graph_3[i], 5);
       Serial.print(",xxx");
       Serial.print(steps[i]);
-      Serial.print(".00,");
+      Serial.print(",");
       Serial.println();
     }
     Serial.print("DATATOGRAPH: ");
@@ -617,7 +638,8 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
     Serial.print(",rtres");
     Serial.print(pip, 2);
     Serial.print(",rcuatro");
-    Serial.println(peep, 2);
+    Serial.print(peep, 2);
+    Serial.println(",");
     buffer_index = 0;
   }
   #else
@@ -649,8 +671,6 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
   Serial.print(" ");
   Serial.print(m->target_vel, 4);
   Serial.print(" ");
-  Serial.print(analogRead(PIN_CURRENT_SENSE));
-  Serial.print(" ");
   Serial.print(c->t_f);
   Serial.println();
   #endif
@@ -680,7 +700,11 @@ void calc_step(StepInfo *s, CurveParams *c)
   }
   if (!pause)
   {
-    if(millis()-s->start_millis >=  c->t_f) s->start_millis = millis();
+    if(millis()-s->start_millis >=  c->t_f) 
+    {
+      s->start_millis = millis();
+      cycle++;
+    }
     s->cur_step = (millis()-s->start_millis);
     if(s->cur_step <= c->t[0])s->cur_stage = INS_1;
     else if(s->cur_step <= c->t[1])s->cur_stage = INS_2;
@@ -938,8 +962,8 @@ int16_t calculate_angular_acceleration(double ang_vel)
 
 void motor_write(double pwm)
 {
-  if(pwm > 0) digitalWrite(PIN_DIR, 0);
-  else digitalWrite(PIN_DIR, 1);
+  if(pwm > 0) digitalWrite(PIN_DIR, FORWARD_LOGIC);
+  else digitalWrite(PIN_DIR, BACKWARD_LOGIC);
   analogWrite(PIN_PWM, abs(pwm));
 }
 
@@ -1056,26 +1080,26 @@ void hard_calibrate()
       state++;
     }
     break;
-  case 4:
-  {
-    uint32_t current_adc = analogRead(PIN_CURRENT_SENSE);
-    if(current_adc < CURRENT_COLLISION_THRESHOLD)
-    {
-      Serial.println((encoder.getPosition()<<1) - zero_position);
-      Serial.println(current_adc);
-      motor_write(MIN_VEL);
-    }
-    else
-    {
-      motor_write(0);
-      state++;
-      Serial.print("Upper limit: ");
-      Serial.println(encoder.getPosition());
-      zero_position = encoder.getPosition() - AMBU_OPEN_ANGLE*DEG_TO_RAD*RAD_TO_CLICK;
-      Serial.println("Going to zero...");
-    }
-    break;
-  }
+  // case 4:
+  // {
+  //   uint32_t current_adc = analogRead(PIN_CURRENT_SENSE);
+  //   if(current_adc < CURRENT_COLLISION_THRESHOLD)
+  //   {
+  //     Serial.println((encoder.getPosition()<<1) - zero_position);
+  //     Serial.println(current_adc);
+  //     motor_write(MIN_VEL);
+  //   }
+  //   else
+  //   {
+  //     motor_write(0);
+  //     state++;
+  //     Serial.print("Upper limit: ");
+  //     Serial.println(encoder.getPosition());
+  //     zero_position = encoder.getPosition() - AMBU_OPEN_ANGLE*DEG_TO_RAD*RAD_TO_CLICK;
+  //     Serial.println("Going to zero...");
+  //   }
+  //   break;
+  // }
   case 5:
     if(((encoder.getPosition()<<1) - zero_position) > 0)
     {

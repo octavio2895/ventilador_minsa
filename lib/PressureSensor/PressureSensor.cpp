@@ -12,26 +12,31 @@ double calculate_flow_venturi(PressureSensor *p)
 
 double calculate_flow_oplate(PressureSensor *p)
 {
-  if(p->pressure > 0) return (sqrt(abs(p->pressure)/Y0));
-  else return (-sqrt(abs(p->pressure)/Y0));
+  if(p->pressure > 0) return (sqrt(abs(p->pressure)/y_0));
+  else return (-sqrt(abs(p->pressure)/y_0));
 }
 
 
 void read_pressure(PressureSensor *p)
 {
-  p->pressure_adc = analogRead(A0);
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER * 2.222);
+  static int16_t adc[8];
+  static int16_t i = 0;
+  if(i>7)i = 0;
+  adc[i] = analogRead(A0);
+  p->pressure_adc = arr_average(adc, 8);
+  p->pressure = ((p->pressure_adc - p->openpressure) * MULTIPLIER * 2.222);
+  i++;
 }
 
 void read_pressure_2(PressureSensor *p)
 {
-  static int16_t adc[16];
+  static int16_t adc[8];
   static int16_t i = 0;
-  if(i>15)i = 0;
+  if(i>7)i = 0;
   adc[i] = abs(ads.readADC_Differential_2_3());
-  p->pressure_adc = arr_average(adc, 16);
+  p->pressure_adc = arr_average(adc, 8);
   if(p->pressure_adc <= (double)(p->openpressure+1)) p->pressure_adc = (double)p->openpressure;
-  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER_2 * 1.25* 10.1972); // cmH2O
+  p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER_2 * 1.25* 10.1972*4.40); // cmH2O
   i++;
 }
 
@@ -69,6 +74,7 @@ int16_t calibrate_pressure_sensor(PressureSensor *p)
   {
     if (timer < millis()) 
     {
+      // Serial.println("Entering");
       if (p->id == 0)open_pressure += (double)analogRead(A0);
       else open_pressure += abs((double)ads.readADC_Differential_2_3());
       // Serial.println(open_pressure);

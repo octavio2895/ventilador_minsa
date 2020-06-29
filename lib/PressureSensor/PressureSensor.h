@@ -19,9 +19,11 @@
 #define SQ_AREA_RATIO           16
 #define MULTIPLIER              5/4096
 #define MULTIPLIER_2            0.0078125
-#define Y0                      0.212                   // From paper Schena et al 2013. Calibration factor of orifice plate flowmeter at ~22C
+// #define Y0                      0.212                   // From paper Schena et al 2013. Calibration factor of orifice plate flowmeter at ~22C
+// #define Y0                      0.53                   // From paper Schena et al 2013. Calibration factor of orifice plate flowmeter at ~22C
 #define ORIFICE_PLATE_REF_TEMP  22
 
+extern double y_0;
 
 struct PressureSensor
 {

@@ -81,7 +81,7 @@ int16_t calibrate_pressure_sensor(PressureSensor *p)
       count++;
       timer = millis() + 50;
     }
-    if (count >= 100) 
+    if (count >= 15) 
     {
       p->openpressure = ((int16_t)open_pressure/(count));
       Serial.println(p->openpressure);

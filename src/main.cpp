@@ -20,7 +20,7 @@
 #define FORWARD_LOGIC         1
 #define BACKWARD_LOGIC        0
 
-#define USE_FLUTTER_PRINTS
+// #define USE_FLUTTER_PRINTS
 
 // Physical constraints.
 #define ENCODER_CPR           8000
@@ -107,8 +107,6 @@ struct CurveParams
 {
   double rr = 15;
   double x = 1;
-  double tidal_vol = 42;
-  double a_t = tidal_vol;
   uint32_t t_f = 60000/rr;
   uint32_t t_d = t_f/(x+1);
   double kv[3] = {K2, K4, K6};
@@ -120,10 +118,11 @@ struct CurveParams
     ACCEL_2,
     ACCEL_3
   };
-
   double v[7];
   uint32_t t[7];
   double plus_c[7];
+  double target_vol = .7;
+  double a_t = 42;
 
 }curve_vals, new_vals;
 
@@ -162,12 +161,13 @@ struct PlotDat
 PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
-double y_0 = 0.62;
+double y_0 = 0.51;
 bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
 bool plot_enable = 0, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
+double k_vol = 0.5;
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
@@ -204,6 +204,8 @@ void home();
 void reset_vals();
 void get_accels(CurveParams*, double, double, double);
 void hard_calibrate();
+double vol_to_deg(double);
+double deg_to_vol(double);
 
 void setup()
 {
@@ -228,7 +230,7 @@ void setup()
   ads.setSPS(ADS1115_DR_860SPS); 
   // calibrate_pressure_sensor(&pres_0); // TODO: Review this
   calibrate_pressure_sensor(&pres_1);
-  pres_0.openpressure = 256;
+  pres_0.openpressure = 253;
   Serial.println("Done!");
   // pres_1.openpressure = 13;
 }
@@ -368,12 +370,27 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
     pip = arr_top(top_pres, 64);
     memset(top_pres, 0, sizeof(top_pres));
     volume_in = volume;
+    if(volume_in > curve_vals.target_vol*(1.1) || volume_in < curve_vals.target_vol*(.9))
+    {
+      double error = volume_in - curve_vals.target_vol;
+      double new_ang = error > 0? curve_vals.a_t - abs(vol_to_deg(error*k_vol)) : curve_vals.a_t + abs(vol_to_deg(error*k_vol));
+      Serial.println(error);
+      Serial.println(new_ang);
+      if(params_check(curve_vals.rr, curve_vals.x, new_ang) == 0)
+      {
+        Serial.println("Params pass!");
+        get_accels(&new_vals, curve_vals.rr, curve_vals.x, new_ang);
+        params_change_flag = 1;
+        new_vals.a_t = new_ang;
+      }
+      Serial.println(params_check(curve_vals.rr, curve_vals.x, vol_to_deg(curve_vals.target_vol - error*k_vol)));
+    }
   }
 
   else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
   {
     volume_out = volume_in - volume;
-    pres_0.openpressure = arr_average(open_pressure_adc, 8);
+    // pres_0.openpressure = arr_average(open_pressure_adc, 8);
     peep = arr_average(exp_press, 16);
     init_angle = (encoder.getPosition()<<1);
   }
@@ -458,14 +475,15 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
       return;
     }
 
-    int param_check_var = params_check(value_1, value_2, value_3);
+    int param_check_var = params_check(value_1, value_2, vol_to_deg((double)u_value_3/1000));
     if(param_check_var == 0)
     {
       Serial.println("Combination accepted!");
       get_accels(n, value_1, value_2, value_3);
       n->rr = value_1;
       n->x = value_2;
-      n->tidal_vol = value_3;
+      n->a_t = vol_to_deg((double)u_value_3/1000);
+      n->target_vol = (double)u_value_3/1000;
       params_change_flag = 1;
     }
     else if (param_check_var == 1) Serial.println("Tidal volume too high! Ignoring...");
@@ -516,10 +534,19 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   else Serial.println("CMD not recognized");
 }
 
-void get_accels(CurveParams *c, double rr, double x, double tidal_vol)
+double deg_to_vol(double deg)
 {
-  double min_accel = rr*rr*tidal_vol*(x+1)*(x+1)/600; // TODO: redoing this calculation, this should be optimized.
-  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800;
+  return((22.1944588*deg-218.41009)/1000);
+}
+
+double vol_to_deg(double vol)
+{
+  return(44.8549*vol+9.93772);
+}
+void get_accels(CurveParams *c, double rr, double x, double a_t)
+{
+  double min_accel = rr*rr*a_t*(x+1)*(x+1)/600; // TODO: redoing this calculation, this should be optimized.
+  double max_accel = 17*rr*rr*a_t*(x+1)*(x+1)/1800;
   c->accel[0] = max_accel > MAX_ACCEL ? (MAX_ACCEL + min_accel)/2 : (max_accel + min_accel)/2;
   c->accel[1] = -c->accel[0]/16;
   c->accel[2] = -c->accel[0]/2;
@@ -537,16 +564,16 @@ int8_t k_check(double stage, double kp, double kv)
 }
 
 
-int8_t params_check(double rr, double x, double tidal_vol)
+int8_t params_check(double rr, double x, double a_t)
 {
-  if(tidal_vol > MAX_VOL) return 1;
-  if(tidal_vol<MIN_VOL) return 2;
+  if(a_t > MAX_VOL) return 1;
+  if(a_t<MIN_VOL) return 2;
   if(rr>MAX_RR) return 3;
   if(rr<MIN_RR) return 4;
   if(x>MAX_X) return 5;
   if(x<MIN_X) return 6;
-  double min_accel = rr*rr*tidal_vol*(x+1)*(x+1)/600;
-  double max_accel = 17*rr*rr*tidal_vol*(x+1)*(x+1)/1800; // Actually, its just 5.666*min_accel. That probably depends on the constrain that m2 = -m1/16 and m3 = -m1/2.
+  double min_accel = rr*rr*a_t*(x+1)*(x+1)/600;
+  double max_accel = 17*rr*rr*a_t*(x+1)*(x+1)/1800; // Actually, its just 5.666*min_accel. That probably depends on the constrain that m2 = -m1/16 and m3 = -m1/2.
   if(min_accel > MAX_ACCEL) return 7; // Cannot be run.
   else return 0; // Could be done by modifying acceleration.
   return -1; // Should never get here
@@ -559,7 +586,9 @@ void print_curve_data(CurveParams *c)
   Serial.print(" X: ");
   Serial.print(c->x,0);
   Serial.print(" Tidal Vol: ");
-  Serial.println(c->tidal_vol, 0);
+  Serial.print(c->target_vol*1000, 0);
+  Serial.print(" A_T: ");
+  Serial.println(c->a_t, 0);
   Serial.print("Timming --> ");
   for(int i=0; i<7; i++)
   {
@@ -726,10 +755,10 @@ void update_params(StepInfo *s, CurveParams *c, CurveParams *n)
   static bool init;
   if (params_change_flag && s->cur_step < 20)
   {
-    c->tidal_vol = n->tidal_vol;
+    c->a_t = n->a_t;
     c->rr = n->rr;
     c->x = n->x;
-    c->a_t = c->tidal_vol;
+    c->target_vol = n->target_vol;
     c->t_f = 60000/c->rr;
     c->t_d = c->t_f/(c->x+1);
     c->accel[0] = n->accel[0];
@@ -1011,6 +1040,7 @@ void calibrate()
     Serial.println(zero_position);
     stopped_millis = millis() + 5000;
     state++;
+    calibrate_pressure_sensor(&pres_0);
     break;
   case 3:
     if(millis() > stopped_millis) 

@@ -20,7 +20,7 @@
 #define FORWARD_LOGIC         1
 #define BACKWARD_LOGIC        0
 
-// #define USE_FLUTTER_PRINTS
+#define USE_FLUTTER_PRINTS
 
 // Physical constraints.
 #define ENCODER_CPR           8000
@@ -162,12 +162,12 @@ PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
 double y_0 = 0.51;
-bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 0, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
+bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 1, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
-bool plot_enable = 0, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
-double k_vol = 0.5;
+bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
+double k_vol = 0.3;
 
 // Global objects.
 RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
@@ -349,7 +349,6 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
   {
     volume = 0; //Resets volume to avoid drifting.
     #ifdef USE_FLUTTER_PRINTS
-    Serial.print("DATATOGRAPH: ");
     Serial.print("glen");
     Serial.print(curve_vals.t_f);
     Serial.println(",");
@@ -411,6 +410,7 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
   prev_stage = s->cur_stage;
   prev_flow = flow;
   
+  if (pause) volume = 0;
   return volume;
 }
 
@@ -660,10 +660,12 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m)
       Serial.println();
     }
     Serial.print("DATATOGRAPH: ");
-    Serial.print("rUUuno");
-    Serial.print(volume_in, 4);
+    Serial.print("cycle");
+    Serial.print(cycle_buf[9]);
+    Serial.print(",rUUuno");
+    Serial.print(volume_in*1000,0);
     Serial.print(",rdos");
-    Serial.print(volume_out, 4);
+    Serial.print(volume_out*1000,0);
     Serial.print(",rtres");
     Serial.print(pip, 2);
     Serial.print(",rcuatro");
@@ -726,6 +728,7 @@ void calc_step(StepInfo *s, CurveParams *c)
   {
     s->start_millis = millis() - s->cur_step;
     was_paused = false;
+    volume = 0;
   }
   if (!pause)
   {

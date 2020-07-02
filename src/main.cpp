@@ -20,7 +20,7 @@
 #define FORWARD_LOGIC         1
 #define BACKWARD_LOGIC        0
 
-#define USE_FLUTTER_PRINTS
+// #define USE_FLUTTER_PRINTS
 
 // Physical constraints.
 #define ENCODER_CPR           8000
@@ -28,7 +28,7 @@
 #define ACCEL_2               -20
 #define ACCEL_3               -160
 #define MAX_ACCEL             700
-#define ZERO_OFFSET           300
+#define ZERO_OFFSET           1000
 #define MIN_VEL               60
 #define MAX_VOL               55
 #define MIN_VOL               0
@@ -165,7 +165,7 @@ double y_0 = 0.51;
 bool cal_flag = false, h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pause = 0, plot_flag = 1, params_change_flag = 0, pres_cal_fail = 0, stop_flag = 0, reset_flag = 0, restart_step_flag;
 uint16_t zero_position = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
-double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep;
+double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep, max_ins_flow, max_exp_flow;
 bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
 double k_vol = 0.3;
 
@@ -344,16 +344,24 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
   static uint16_t open_pressure_index = 0;
   static double top_pres[64];
   static uint16_t top_pres_index = 0;
+  static double max_inspiration_flow = 0;
+  static double max_expiration_flow = 0;
 
   if(prev_stage != INS_1 && s->cur_stage == INS_1)
   {
+    volume_out = volume_in - volume;
     volume = 0; //Resets volume to avoid drifting.
+    max_exp_flow = max_expiration_flow;
     #ifdef USE_FLUTTER_PRINTS
     Serial.print("glen");
     Serial.print(curve_vals.t_f);
     Serial.println(",");
     #else
     Serial.print(max_angle, 5);
+    Serial.print(" ");
+    Serial.print(max_exp_flow*60, 5);
+    Serial.print(" ");
+    Serial.print(max_ins_flow*60, 5);
     Serial.print(" ");
     Serial.print(volume_in, 5);
     Serial.print(" ");
@@ -369,10 +377,12 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
     pip = arr_top(top_pres, 64);
     memset(top_pres, 0, sizeof(top_pres));
     volume_in = volume;
+    max_ins_flow = max_inspiration_flow;
     if(volume_in > curve_vals.target_vol*(1.1) || volume_in < curve_vals.target_vol*(.9))
     {
       double error = volume_in - curve_vals.target_vol;
       double new_ang = error > 0? curve_vals.a_t - abs(vol_to_deg(error*k_vol)) : curve_vals.a_t + abs(vol_to_deg(error*k_vol));
+      if(new_ang > MAX_VOL) new_ang = MAX_VOL;
       Serial.println(error);
       Serial.println(new_ang);
       if(params_check(curve_vals.rr, curve_vals.x, new_ang) == 0)
@@ -381,6 +391,9 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
         get_accels(&new_vals, curve_vals.rr, curve_vals.x, new_ang);
         params_change_flag = 1;
         new_vals.a_t = new_ang;
+        new_vals.target_vol = curve_vals.target_vol;
+        new_vals.x = curve_vals.x;
+        new_vals.rr = curve_vals.rr;
       }
       Serial.println(params_check(curve_vals.rr, curve_vals.x, vol_to_deg(curve_vals.target_vol - error*k_vol)));
     }
@@ -388,16 +401,26 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
 
   else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
   {
-    volume_out = volume_in - volume;
+    max_inspiration_flow = 0;
     // pres_0.openpressure = arr_average(open_pressure_adc, 8);
     peep = arr_average(exp_press, 16);
     init_angle = (encoder.getPosition()<<1);
+  }
+
+  else if(s->cur_stage >= INS_1 && s->cur_stage <= INS_3) 
+  {
+    if(flow > max_inspiration_flow) max_inspiration_flow = flow;
   }
 
   if(s->cur_stage == INS_3)
   {
     if(top_pres_index > 63) top_pres_index = 0;
     top_pres[top_pres_index++] = pres_1.pressure;
+  }
+
+  if(s->cur_stage >= INS_3 && s->cur_stage <= REST_2)
+  {
+    if(flow < max_expiration_flow) max_expiration_flow = flow;
   }
 
   if(s->cur_stage == REST_2)
@@ -479,7 +502,7 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
     if(param_check_var == 0)
     {
       Serial.println("Combination accepted!");
-      get_accels(n, value_1, value_2, value_3);
+      get_accels(n, value_1, value_2, vol_to_deg((double)u_value_3/1000));
       n->rr = value_1;
       n->x = value_2;
       n->a_t = vol_to_deg((double)u_value_3/1000);

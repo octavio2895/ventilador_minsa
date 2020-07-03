@@ -71,10 +71,6 @@
 #define K5                    150//4
 #define K6                    0//4
 
-//Target deg/s
-#define DEG_TO_RAD            PI/180
-#define CLICKS_TO_RAD         (2*PI/ENCODER_CPR)
-#define RAD_TO_CLICK          (ENCODER_CPR/2*PI)
 
 //Control encoder
 struct ControlVals 
@@ -103,49 +99,7 @@ struct MotorDynamics
   volatile bool click_dir;
 }motor_vals;
 
-struct CurveParams
-{
-  double rr = 15;
-  double x = 1;
-  uint32_t t_f = 60000/rr;
-  uint32_t t_d = t_f/(x+1);
-  double kv[3] = {K2, K4, K6};
-  double kp[3] = {K1, K3, K5};
-
-  double accel[3] = 
-  {
-    ACCEL_1,
-    ACCEL_2,
-    ACCEL_3
-  };
-  double v[7];
-  uint32_t t[7];
-  double plus_c[7];
-  double target_vol = .7;
-  double a_t = 42;
-
-}curve_vals, new_vals;
-
-
-enum Stages
-{
-  INS_1 = 0,
-  INS_2 = 1,
-  INS_3 = 2,
-  REST_1 = 3,
-  EXP_1 = 4,
-  EXP_2 = 5,
-  REST_2 = 6
-};
-
-
-struct StepInfo
-{
-  uint32_t start_millis;
-  uint32_t cur_millis;
-  Stages cur_stage;
-  uint32_t cur_step;
-}step;
+struct CurveParams curve_vals, new_vals;
 
 struct PlotDat
 {
@@ -158,6 +112,7 @@ struct PlotDat
   double cur_vel;
 }plot;
 
+FlowData current_flow;
 PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 
 // Global vars.
@@ -170,7 +125,7 @@ bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_
 double k_vol = 0.3;
 
 // Global objects.
-RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
+RotaryEncoder encoder;
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
 Adafruit_ADS1115 ads;
 
@@ -243,10 +198,11 @@ void loop()
 
   if (sensor_update_enable && millis() > next_sensor_update)
   {
-    read_pressure(&pres_0);
-    read_pressure_2(&pres_1);
-    flow = calculate_flow_oplate(&pres_0);
-    volume = calculate_volume(&step, flow);
+    read_pressure(&pres_0, &current_flow);
+    read_pressure_2(&pres_1, &current_flow);
+    calculate_flow_oplate(&current_flow);
+    calculate_flow_state(&step, &curve_vals, &current_flow);
+    flow_controller(&curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
 
@@ -331,106 +287,6 @@ void home()
   else if (encoder.getPosition()<<1 < zero_position) motor_write(50);
 }
 
-double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machine, refactor the shit out of this
-{
-  static Stages prev_stage = INS_1;
-  static double volume = 0;
-  static double prev_flow = 0;
-  static double max_angle = 0;
-  static double init_angle = 0;
-  static uint32_t prev_millis = millis();
-  static int16_t open_pressure_adc[16];
-  static int16_t exp_press[16];
-  static uint16_t open_pressure_index = 0;
-  static double top_pres[64];
-  static uint16_t top_pres_index = 0;
-  static double max_inspiration_flow = 0;
-  static double max_expiration_flow = 0;
-
-  if(prev_stage != INS_1 && s->cur_stage == INS_1)
-  {
-    volume_out = volume_in - volume;
-    volume = 0; //Resets volume to avoid drifting.
-    max_exp_flow = max_expiration_flow;
-    #ifdef USE_FLUTTER_PRINTS
-    Serial.print("glen");
-    Serial.print(curve_vals.t_f);
-    Serial.println(",");
-    #else
-    Serial.print(max_angle, 5);
-    Serial.print(" ");
-    Serial.print(max_exp_flow*60, 5);
-    Serial.print(" ");
-    Serial.print(max_ins_flow*60, 5);
-    Serial.print(" ");
-    Serial.print(volume_in, 5);
-    Serial.print(" ");
-    Serial.print(pip, 5);
-    Serial.print(" ");
-    Serial.println(volume_out, 5);
-    #endif
-  }
-  volume = volume + (flow*(millis() - prev_millis)/1000);
-  if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
-  {
-    max_angle = CLICKS_TO_RAD*RAD_TO_DEG*((encoder.getPosition()<<1) - init_angle);
-    pip = arr_top(top_pres, 64);
-    memset(top_pres, 0, sizeof(top_pres));
-    volume_in = volume;
-    max_ins_flow = max_inspiration_flow;
-    if(volume_in > curve_vals.target_vol*(1.1) || volume_in < curve_vals.target_vol*(.9))
-    {
-      double error = volume_in - curve_vals.target_vol;
-      double new_ang = error > 0? curve_vals.a_t - abs(vol_to_deg(error*k_vol)) : curve_vals.a_t + abs(vol_to_deg(error*k_vol));
-      if(new_ang > MAX_VOL) new_ang = MAX_VOL;
-      if(new_ang != curve_vals.a_t && params_check(curve_vals.rr, curve_vals.x, new_ang) == 0)
-      {
-        get_accels(&new_vals, curve_vals.rr, curve_vals.x, new_ang);
-        params_change_flag = 1;
-        new_vals.a_t = new_ang;
-        new_vals.target_vol = curve_vals.target_vol;
-        new_vals.x = curve_vals.x;
-        new_vals.rr = curve_vals.rr;
-      }
-    }
-  }
-
-  else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
-  {
-    max_inspiration_flow = 0;
-    peep = arr_average(exp_press, 16);
-    init_angle = (encoder.getPosition()<<1);
-  }
-
-  else if(s->cur_stage >= INS_1 && s->cur_stage <= INS_3) 
-  {
-    if(flow > max_inspiration_flow) max_inspiration_flow = flow;
-  }
-
-  if(s->cur_stage == INS_3)
-  {
-    if(top_pres_index > 63) top_pres_index = 0;
-    top_pres[top_pres_index++] = pres_1.pressure;
-  }
-
-  if(s->cur_stage >= INS_3 && s->cur_stage <= REST_2)
-  {
-    if(flow < max_expiration_flow) max_expiration_flow = flow;
-  }
-
-  if(s->cur_stage == REST_2)
-  {
-    if(open_pressure_index > 7) open_pressure_index = 0;
-    exp_press[open_pressure_index] = (int16_t)pres_1.pressure;
-    open_pressure_adc[open_pressure_index++] = (int16_t)pres_0.pressure_adc;
-  }
-  prev_millis = millis();
-  prev_stage = s->cur_stage;
-  prev_flow = flow; // TODO: Reimplement trapezoidal approximation
-  
-  if (pause) volume = 0;
-  return volume;
-}
 
 void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
 {
@@ -552,24 +408,6 @@ void parse_params(char buf[], uint16_t size, CurveParams *c, CurveParams *n)
   else Serial.println("CMD not recognized");
 }
 
-double deg_to_vol(double deg)
-{
-  return((22.1944588*deg-218.41009)/1000);
-}
-
-double vol_to_deg(double vol)
-{
-  return(44.8549*vol+9.93772);
-}
-void get_accels(CurveParams *c, double rr, double x, double a_t)
-{
-  double min_accel = rr*rr*a_t*(x+1)*(x+1)/600; // TODO: redoing this calculation, this should be optimized.
-  double max_accel = 17*rr*rr*a_t*(x+1)*(x+1)/1800;
-  c->accel[0] = max_accel > MAX_ACCEL ? (MAX_ACCEL + min_accel)/2 : (max_accel + min_accel)/2;
-  c->accel[1] = -c->accel[0]/16;
-  c->accel[2] = -c->accel[0]/2;
-}
-
 int8_t k_check(double stage, double kp, double kv)
 {
   if(stage >= (sizeof(control_vals.kp)/sizeof(control_vals.kp[0]))) return 1;
@@ -581,21 +419,6 @@ int8_t k_check(double stage, double kp, double kv)
   else return 0;
 }
 
-
-int8_t params_check(double rr, double x, double a_t)
-{
-  if(a_t > MAX_VOL) return 1;
-  if(a_t<MIN_VOL) return 2;
-  if(rr>MAX_RR) return 3;
-  if(rr<MIN_RR) return 4;
-  if(x>MAX_X) return 5;
-  if(x<MIN_X) return 6;
-  double min_accel = rr*rr*a_t*(x+1)*(x+1)/600;
-  double max_accel = 17*rr*rr*a_t*(x+1)*(x+1)/1800; // Actually, its just 5.666*min_accel. That probably depends on the constrain that m2 = -m1/16 and m3 = -m1/2.
-  if(min_accel > MAX_ACCEL) return 7; // Cannot be run.
-  else return 0; // Could be done by modifying acceleration.
-  return -1; // Should never get here
-}
 
 void print_curve_data(CurveParams *c)
 {

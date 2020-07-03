@@ -331,7 +331,7 @@ void home()
   else if (encoder.getPosition()<<1 < zero_position) motor_write(50);
 }
 
-double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machine
+double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machine, refactor the shit out of this
 {
   static Stages prev_stage = INS_1;
   static double volume = 0;
@@ -383,11 +383,8 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
       double error = volume_in - curve_vals.target_vol;
       double new_ang = error > 0? curve_vals.a_t - abs(vol_to_deg(error*k_vol)) : curve_vals.a_t + abs(vol_to_deg(error*k_vol));
       if(new_ang > MAX_VOL) new_ang = MAX_VOL;
-      Serial.println(error);
-      Serial.println(new_ang);
-      if(params_check(curve_vals.rr, curve_vals.x, new_ang) == 0)
+      if(new_ang != curve_vals.a_t && params_check(curve_vals.rr, curve_vals.x, new_ang) == 0)
       {
-        Serial.println("Params pass!");
         get_accels(&new_vals, curve_vals.rr, curve_vals.x, new_ang);
         params_change_flag = 1;
         new_vals.a_t = new_ang;
@@ -395,14 +392,12 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
         new_vals.x = curve_vals.x;
         new_vals.rr = curve_vals.rr;
       }
-      Serial.println(params_check(curve_vals.rr, curve_vals.x, vol_to_deg(curve_vals.target_vol - error*k_vol)));
     }
   }
 
   else if(prev_stage == REST_2 && s->cur_stage == INS_1) 
   {
     max_inspiration_flow = 0;
-    // pres_0.openpressure = arr_average(open_pressure_adc, 8);
     peep = arr_average(exp_press, 16);
     init_angle = (encoder.getPosition()<<1);
   }
@@ -431,7 +426,7 @@ double calculate_volume(StepInfo *s, double flow) // TODO: Change to state machi
   }
   prev_millis = millis();
   prev_stage = s->cur_stage;
-  prev_flow = flow;
+  prev_flow = flow; // TODO: Reimplement trapezoidal approximation
   
   if (pause) volume = 0;
   return volume;

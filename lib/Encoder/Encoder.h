@@ -2,6 +2,7 @@
 #define ENCODER_LIB
 
 #include <RotaryEncoder.h>
+#include <SysStructs.h>
 
 //Target deg/s
 #define DEG_TO_RAD            PI/180
@@ -11,4 +12,6 @@
 #define PIN_ENCODER_B         PA6
 #define ENCODER_CPR           8000
 
-RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
+// extern RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1)
+extern int32_t zero_position;
+#endif

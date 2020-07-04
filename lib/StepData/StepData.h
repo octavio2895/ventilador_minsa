@@ -7,22 +7,8 @@
 #include "WProgram.h"
 #endif
 
+#include <SysStructs.h>
 
-enum Stages
-{
-  INS_1 = 0,
-  INS_2 = 1,
-  INS_3 = 2,
-  REST_1 = 3,
-  EXP_1 = 4,
-  EXP_2 = 5,
-  REST_2 = 6
-};
+void calc_step(StepInfo *s, SysState *sys, CurveParams *c);
 
-struct StepInfo
-{
-  uint32_t start_millis;
-  uint32_t cur_millis;
-  Stages cur_stage;
-  uint32_t cur_step;
-}step;
+#endif

@@ -52,17 +52,10 @@
 #define SERIAL_UPDATE_DELAY   50
 #define PRES_CAL_DELAY        100
 #define SENSOR_UDPATE_DELAY   5
-#define PLOT_UPDATE_DELAY     15
+#define PLOT_UPDATE_DELAY     5
 
 // Parameter
 #define MAX_ADC_RESOLUTION    16
-
-#define K1                    37.5//85
-#define K2                    1.25//4
-#define K3                    120
-#define K4                    0//4
-#define K5                    150//4
-#define K6                    0//4
 
 
 struct LcdVals
@@ -91,6 +84,7 @@ CurveParams curve_vals, new_vals;
 
 // Global vars.
 double y_0 = 0.51;
+double y_1 = 0.58;
 bool h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pres_cal_fail = 0, reset_flag = 0;
 uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep, max_ins_flow, max_exp_flow;
@@ -108,6 +102,7 @@ Adafruit_ADS1115 ads;
 void BlinkLED();
 void calibrate();
 void encoderISR();
+void limitswitchISR();
 void lcd_update(LcdVals *lcd_vals);
 void home();
 void reset_vals();
@@ -121,8 +116,10 @@ void setup()
   pinMode(PIN_DIR, OUTPUT_OPEN_DRAIN);
   digitalWrite(PIN_PWM, 0);
   encoder.begin();
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A),  encoderISR,       CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B),  encoderISR,       CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
+  attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH), limitswitchISR, CHANGE);
+  sys_state.limit_switch_state = !digitalRead(PIN_LIMIT_SWITCH);
   #ifdef SCREEN
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
@@ -249,9 +246,22 @@ void BlinkLED()
   }
 }
 
-void encoderISR()
+void encoderISR() 
 {
   encoder.readAB();
+}
+
+void limitswitchISR() // TODO: Find better debouncing method
+{
+  if(!digitalRead(PIN_LIMIT_SWITCH))
+  {
+    motor_write(&motor_vals, 0);
+    sys_state.limit_switch_state = 1;
+  }
+  else 
+  {
+    sys_state.limit_switch_state = 0;
+  }
 }
 
 void lcd_update(LcdVals *lcd_vals)
@@ -280,7 +290,7 @@ void calibrate()
     state++;
     break;
   case 1:
-    if(digitalRead(PIN_LIMIT_SWITCH))
+    if(!sys_state.limit_switch_state)
     {
       motor_write(&motor_vals, -MIN_VEL);
     }

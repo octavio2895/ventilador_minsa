@@ -111,7 +111,7 @@ void filter_motor(MotorDynamics *m)
 
 void execute_motor(SysState *sys, MotorDynamics *m)
 {
-  if (sys->play_state == PAUSE)
+  if (sys->play_state == PAUSE || sys->limit_switch_state)
   {
     analogWrite(m->pwm_pin, 0);
     return;
@@ -124,24 +124,32 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   static double error_position;
   static double error_velocity;
   static double motor_volts;
+  double kp = 658.22*m->current_ang_pos*m->current_ang_pos -51.57*m->current_ang_pos + 120;
 
   //Calculate error
   error_position = m->target_pos - m->current_ang_pos;
   error_velocity = m->target_vel - m->current_vel;
+  if(s->cur_stage >= REST_1) kp = K1;
+  kp = interpolate_gains(m->current_ang_pos);
 
-  //Error protection
-  if (error_position > 0.8) // TODO: Review error protection
-  {
-    error_position = 0.8;
-  }
-  else if (error_position < -0.8)
-  {
-    error_position = -0.8;
-  }
-
-  motor_volts = c->kp[s->cur_stage] * error_position + c->kv[s->cur_stage] * error_velocity;
+  motor_volts = kp * error_position + c->kv[s->cur_stage] * error_velocity;
   m->output = fmap(motor_volts, 0, 12, 0, MAX_PWM);
 
+}
+double interpolate_gains(double ang)
+{
+  if(ang<K_ANG_1)
+  {
+    return(ang*((K_VAL_1-K_VAL_0/K_ANG_1-K_ANG_0))+K_ANG_0);
+  }
+  if(ang<K_ANG_2)
+  {
+    return(ang*((K_VAL_2-K_VAL_1/K_ANG_2-K_ANG_1))+K_ANG_1);
+  }
+  if(ang>=K_ANG_2)
+  {
+    return(ang*((K_VAL_3-K_VAL_2/K_ANG_3-K_ANG_2))+K_ANG_2);
+  }
 }
 
 double fmap(double in, double in_min, double in_max, double out_min, double out_max)

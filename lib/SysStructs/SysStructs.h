@@ -7,12 +7,12 @@
 #include "WProgram.h"
 #endif
 
-#define K1                    37.5//85
-#define K2                    1.25//4
-#define K3                    120
-#define K4                    0//4
-#define K5                    150//4
-#define K6                    0//4
+#define K1                    120//85
+#define K2                    0.5 //4
+#define K3                    300
+#define K4                    2.5//4
+#define K5                    500//4
+#define K6                    .5//4
 #define ACCEL_1               320
 #define ACCEL_2               -20
 #define ACCEL_3               -160
@@ -24,8 +24,10 @@
 #define MAX_X                 4
 #define MIN_X                 1
 #define BREATH_PAUSE          0
+#define GAIN_POINT_0          0.39
+#define GAIN_POINT_1          0.8
 
-#define USE_FLUTTER_PRINTS
+// #define USE_FLUTTER_PRINTS
 
 // TODO: Review why this works
 
@@ -135,6 +137,7 @@ struct SysState
     bool plot_enable = 0;
     bool params_change_flag = 0;
     bool restart_step_flag = 0;
+    bool limit_switch_state = 0;
 };
 
 

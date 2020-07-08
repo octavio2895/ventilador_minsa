@@ -13,7 +13,7 @@ double calculate_flow_venturi(PressureSensor *p)
 void calculate_flow_oplate(FlowData *f)
 {
   if(f->differential_pressure > 0) f->flow = sqrt(abs(f->differential_pressure)/y_0);
-  else  f->flow = (-sqrt(abs(f->differential_pressure)/y_0));
+  else  f->flow = (-sqrt(abs(f->differential_pressure)/y_1));
 }
 
 
@@ -115,7 +115,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
     f->flow_exp_max = max_expiration_flow;
     #ifdef USE_FLUTTER_PRINTS
     Serial.print("glen");
-    Serial.print(c->t_f);
+    Serial.print(c->t_f*3);
     Serial.println(",");
     #else
     Serial.print(f->angle, 5);

@@ -67,7 +67,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
   graph_2[buffer_index] = f->flow*60;
   graph_3[buffer_index] = f->pressure;
   cycle_buf[buffer_index] = s->cycle;
-  steps[buffer_index] = s->cur_step;
+  steps[buffer_index] = s->cur_step+(s->cycle%3*c->t_f);
   if (buffer_index++ == 9)
   {
     for(int i = 0; i<(sizeof(steps)/sizeof(steps[0])); i++)
@@ -97,6 +97,10 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
     Serial.print(f->pip, 2);
     Serial.print(",rcuatro");
     Serial.print(f->peep, 2);
+    Serial.print(",rcinco");
+    Serial.print(f->flow_ins_max*60, 2);
+    Serial.print(",rseis");
+    Serial.print(f->flow_exp_max*60, 2);
     Serial.println(",");
     buffer_index = 0;
   }
@@ -125,7 +129,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
   Serial.print(" ");
   Serial.print(c->t_f);
   Serial.print(" ");
-  Serial.print(f->differential_pressure);
+  Serial.print(m->output);
   Serial.println();
   #endif
 }

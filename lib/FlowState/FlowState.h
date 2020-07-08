@@ -25,7 +25,7 @@
 #define MULTIPLIER_2            0.0078125
 #define ORIFICE_PLATE_REF_TEMP  22
 
-extern double y_0;
+extern double y_0, y_1;
 
 extern Adafruit_ADS1115 ads;
 

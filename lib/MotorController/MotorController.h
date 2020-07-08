@@ -10,18 +10,20 @@
 #include <Encoder.h>
 #include <SysStructs.h>
 
-#define K1                    37.5//85
-#define K2                    1.25//4
-#define K3                    120
-#define K4                    0//4
-#define K5                    150//4
-#define K6                    0//4
-#define KP_MAX                300
-#define KP_MIN                0
-#define KV_MAX                50
-#define KV_MIN                0
-#define FORWARD_LOGIC         1
-#define BACKWARD_LOGIC        0
+#define KP_MAX                  300
+#define KP_MIN                  0
+#define KV_MAX                  50
+#define KV_MIN                  0
+#define FORWARD_LOGIC           1
+#define BACKWARD_LOGIC          0
+#define K_ANG_0                 0
+#define K_VAL_0                 120
+#define K_ANG_1                 0.4
+#define K_VAL_1                 150
+#define K_ANG_2                 0.6
+#define K_VAL_2                 250
+#define K_ANG_3                 0.7
+#define K_VAL_3                 500
 //Experiment
 #define FILTER                0
 #define FILTER_PWM            0
@@ -39,5 +41,6 @@ int16_t calculate_angular_acceleration(double ang_vel);
 double calculate_angular_velocity_fod3(MotorDynamics *m);
 double calculate_angular_velocity(MotorDynamics *m);
 int16_t calculate_position(RotaryEncoder *e);
+double interpolate_gains(double);
 
 #endif

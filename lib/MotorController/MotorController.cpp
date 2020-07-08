@@ -124,15 +124,15 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   static double error_position;
   static double error_velocity;
   static double motor_volts;
-  double kp = 658.22*m->current_ang_pos*m->current_ang_pos -51.57*m->current_ang_pos + 120;
+  double kp = 150*m->current_ang_pos + 120;
 
   //Calculate error
   error_position = m->target_pos - m->current_ang_pos;
   error_velocity = m->target_vel - m->current_vel;
   if(s->cur_stage >= REST_1) kp = K1;
-  kp = interpolate_gains(m->current_ang_pos);
+  // kp = interpolate_gains(m->current_ang_pos);
 
-  motor_volts = kp * error_position + c->kv[s->cur_stage] * error_velocity;
+  motor_volts = kp * error_position;
   m->output = fmap(motor_volts, 0, 12, 0, MAX_PWM);
 
 }
@@ -140,15 +140,15 @@ double interpolate_gains(double ang)
 {
   if(ang<K_ANG_1)
   {
-    return(ang*((K_VAL_1-K_VAL_0/K_ANG_1-K_ANG_0))+K_ANG_0);
+    return(ang*((K_VAL_1-K_VAL_0/K_ANG_1-K_ANG_0))+K_VAL_0);
   }
   if(ang<K_ANG_2)
   {
-    return(ang*((K_VAL_2-K_VAL_1/K_ANG_2-K_ANG_1))+K_ANG_1);
+    return(ang*((K_VAL_2-K_VAL_1/K_ANG_2-K_ANG_1))+K_VAL_1);
   }
   if(ang>=K_ANG_2)
   {
-    return(ang*((K_VAL_3-K_VAL_2/K_ANG_3-K_ANG_2))+K_ANG_2);
+    return(ang*((K_VAL_3-K_VAL_2/K_ANG_3-K_ANG_2))+K_VAL_2);
   }
 }
 

@@ -27,7 +27,7 @@
 #define GAIN_POINT_0          0.39
 #define GAIN_POINT_1          0.8
 
-// #define USE_FLUTTER_PRINTS
+#define USE_FLUTTER_PRINTS
 
 // TODO: Review why this works
 

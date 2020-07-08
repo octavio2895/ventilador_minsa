@@ -19,7 +19,7 @@
 #define K_ANG_0                 0
 #define K_VAL_0                 120
 #define K_ANG_1                 0.4
-#define K_VAL_1                 150
+#define K_VAL_1                 200
 #define K_ANG_2                 0.6
 #define K_VAL_2                 250
 #define K_ANG_3                 0.7

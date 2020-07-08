@@ -31,7 +31,7 @@
 #define ACCEL_2               -20
 #define ACCEL_3               -160
 #define MAX_ACCEL             700
-#define ZERO_OFFSET           1000
+#define ZERO_OFFSET           750
 #define MIN_VEL               60
 #define MAX_VOL               55
 #define MIN_VOL               0

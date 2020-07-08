@@ -16,6 +16,10 @@ void print_curve_data(CurveParams *c)
   Serial.print(c->target_vol*1000, 0);
   Serial.print(" A_T: ");
   Serial.println(c->a_t, 0);
+  Serial.print(" Ti: ");
+  Serial.print(c->t_d, 0);
+  Serial.print(" Te: ");
+  Serial.println(c->t_f - c->t_d, 0);
   Serial.print("Timming --> ");
   for(int i=0; i<7; i++)
   {
@@ -100,7 +104,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
     Serial.print(",rcinco");
     Serial.print(f->flow_ins_max*60, 2);
     Serial.print(",rseis");
-    Serial.print(f->flow_exp_max*60, 2);
+    Serial.print(-f->flow_exp_max*60, 2);
     Serial.println(",");
     buffer_index = 0;
   }

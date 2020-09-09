@@ -1,0 +1,18 @@
+{
+	"folders": [
+		{
+			"name": "ventilador_minsa",
+			"path": "."
+		}
+	],
+	"settings": {
+		"files.associations": {
+			"rcc.h": "c",
+			"gpio.h": "c",
+			"timer.h": "c",
+			"stdint.h": "c",
+			"string.h": "c",
+			"*.tcc": "c"
+		}
+	}
+}

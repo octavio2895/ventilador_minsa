@@ -17,7 +17,7 @@
 #define ACCEL_2               -20
 #define ACCEL_3               -160
 #define MAX_ACCEL             700
-#define MAX_VOL               55
+#define MAX_VOL               65
 #define MIN_VOL               0
 #define MAX_RR                40
 #define MIN_RR                0

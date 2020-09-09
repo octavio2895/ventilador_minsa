@@ -124,7 +124,7 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   static double error_position;
   static double error_velocity;
   static double motor_volts;
-  double kp = 150*m->current_ang_pos + 120;
+  double kp = 250*m->current_ang_pos + 120;
 
   //Calculate error
   error_position = m->target_pos - m->current_ang_pos;

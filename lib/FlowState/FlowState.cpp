@@ -114,7 +114,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
     f->volume = 0; //Resets volume to avoid drifting.
     f->flow_exp_max = max_expiration_flow;
     #ifdef USE_FLUTTER_PRINTS
-    Serial.print("glen");
+    Serial.print("A:");
     Serial.print(c->t_f*3);
     Serial.println(",");
     #else

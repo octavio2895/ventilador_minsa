@@ -4,6 +4,7 @@
 #include <LiquidCrystal_I2C.h>
 #include <math.h>
 #include <Adafruit_ADS1015.h>
+#include <ODriveArduino.h>
 
 #include <FlowState.h>
 #include <Curves.h>
@@ -79,8 +80,10 @@ PressureSensor pres_0  = {.id = 0}, pres_1 = {.id = 1};
 SysState sys_state;
 ControlVals control_vals;
 StepInfo step;
-MotorDynamics motor_vals = {.dir_pin = PIN_DIR, .pwm_pin = PIN_PWM};
+MotorDynamics motor_vals;// = {.dir_pin = PIN_DIR, .pwm_pin = PIN_PWM};
 CurveParams curve_vals, new_vals;
+HardwareSerial Serial2(PA3, PA2);
+ODriveArduino odrive(Serial2);
 
 // Global vars.
 double y_0 = 0.51;
@@ -107,6 +110,9 @@ void lcd_update(LcdVals *lcd_vals);
 void home();
 void reset_vals();
 void hard_calibrate();
+void get_errors(HardwareSerial*, ODriveArduino*, uint32_t*, uint32_t );
+uint8_t print_errors(HardwareSerial*, uint32_t*, uint32_t);
+
 
 void setup()
 {
@@ -128,6 +134,7 @@ void setup()
   analogWriteFrequency(20000);
   Serial.begin(115200);
   Serial.println("Booting up...");
+  Serial2.begin(115200);
   ads.setGain(GAIN_SIXTEEN);
   ads.begin();
   ads.setSPS(ADS1115_DR_860SPS); 
@@ -281,26 +288,32 @@ void calibrate()
 {
   static uint8_t state = 0;
   static uint16_t stopped_millis = 0;
+  static uint32_t odrive_errors[5];
 
   switch (state)
   {
   case 0:
+  {
     sys_state.play_state = PAUSE;
-    Serial.print("Calibrating...");
+    Serial.println("Comunicating with ODrive...");
     state++;
     break;
+  }
   case 1:
-    if(!sys_state.limit_switch_state)
-    {
-      motor_write(&motor_vals, -MIN_VEL);
-    }
-    else
-    {
-      state++;
-      motor_write(&motor_vals, 0);
-    }
+  {
+    Serial.println("Calibrating motor...");
+    delay(10);
+    get_errors(&Serial2, &odrive, odrive_errors, sizeof(odrive_errors));
+    Serial.println(print_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
+    int requested_state = ODriveArduino::AXIS_STATE_FULL_CALIBRATION_SEQUENCE;
+    odrive.run_state(1, requested_state, true);
+    get_errors(&Serial2, &odrive, odrive_errors, sizeof(odrive_errors));
+    Serial.println(print_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
+    state++;
     break;
+  }
   case 2:
+  {
     Serial.println(" Done!");
     Serial.println(encoder.getPosition()<<1);
     encoder.setPosition(0);
@@ -310,17 +323,21 @@ void calibrate()
     state++;
     calibrate_pressure_sensor(&pres_0);
     break;
+  }
   case 3:
+  {
     if(millis() > stopped_millis) 
     {
       Serial.print("Going to zero...");
       state++;
     }
     break;
+  }
   case 4:
+  {
     if(((encoder.getPosition()<<1) - zero_position) < 0)
     {
-      Serial.println((encoder.getPosition()<<1) - zero_position);
+      // Serial.println((encoder.getPosition()<<1) - zero_position);
       motor_write(&motor_vals, MIN_VEL);
     }
     else
@@ -329,11 +346,14 @@ void calibrate()
       motor_write(&motor_vals, 0);
     }
     break;
+  }
   case 5:
+  {
     Serial.println(" Done!");
     sys_state.cal_flag = 1;
     state = 0;
     break;
+  }
   default:
     break;
   }
@@ -417,5 +437,57 @@ void hard_calibrate()
     break;
   default:
     break;
+  }
+}
+
+void get_errors(HardwareSerial* Serial2, ODriveArduino* odrive, uint32_t odrive_errors[], uint32_t size)
+{
+  if (size != sizeof(uint32_t)*5) return;
+  Serial2->println("r axis1.error");
+  odrive_errors[0] = odrive->readInt();
+  Serial2->println("r axis1.motor.error");
+  odrive_errors[1] = odrive->readInt();
+  Serial2->println("r axis1.controller.error");
+  odrive_errors[2] = odrive->readInt();
+  Serial2->println("r axis1.encoder.error");
+  odrive_errors[3] = odrive->readInt();
+  Serial2->println("r axis1.sensorless_estimator.error");
+  odrive_errors[4] = odrive->readInt();
+}
+
+uint8_t print_errors(HardwareSerial *Serial1, uint32_t odrive_errors[], uint32_t size)
+{
+  uint8_t return_code = 0;
+  if (size != sizeof(uint32_t)*5) return 0xFF;
+  if(odrive_errors[0])
+  {
+    return_code += 1;
+    Serial->print("Errors detected: ");
+    if(odrive_errors[1])
+    {
+      return_code += 1<<1;
+      Serial->println("Motor error ");
+    }
+    if(odrive_errors[2])
+    {
+      return_code += 1<<2;
+      Serial->println("Controller error ");
+    }
+    if(odrive_errors[3])
+    {
+      return_code += 1<<3;
+      Serial->println("Encoder error ");
+    }
+    if(odrive_errors[4])
+    {
+      return_code += 1<<4;
+      Serial->println("Sensorless estimator error ");
+    }
+    return return_code;
+  }
+  else
+  {
+    Serial->println("No errors detected");
+    return return_code;
   }
 }

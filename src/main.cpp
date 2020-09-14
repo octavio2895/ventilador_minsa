@@ -57,6 +57,8 @@
 
 // Parameter
 #define MAX_ADC_RESOLUTION    16
+#define MAX_MOTOR_NUM         1
+#define MAX_RESTART_RETRIES   3
 
 
 struct LcdVals
@@ -94,6 +96,7 @@ double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep, max_ins_flow,
 bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
 double k_vol = 0.3;
 int32_t zero_position = 0;
+bool odrive_cal_flag;
 
 RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
 
@@ -110,8 +113,11 @@ void lcd_update(LcdVals *lcd_vals);
 void home();
 void reset_vals();
 void hard_calibrate();
-void get_errors(HardwareSerial*, ODriveArduino*, uint32_t*, uint32_t );
-uint8_t print_errors(HardwareSerial*, uint32_t*, uint32_t);
+int8_t read_errors(HardwareSerial*, ODriveArduino*, uint8_t, uint32_t*, uint32_t );
+uint8_t get_errors(HardwareSerial*, uint32_t*, uint32_t);
+void print_errors_string(char serial_buff[], uint32_t serial_size, uint32_t odrive_errors[], uint32_t error_size);
+void restart_odrive(ODriveArduino* odrive, HardwareSerial* Serial2);
+void odrive_cal(uint8_t motor);
 
 
 void setup()
@@ -148,7 +154,7 @@ void setup()
 void loop() 
 {
   BlinkLED();
-  if(!sys_state.cal_flag) calibrate();
+  if(!odrive_cal_flag) odrive_cal(1);
   if(!h_cal_flag) hard_calibrate();
 
   if (sensor_update_enable && millis() > next_sensor_update)
@@ -284,11 +290,107 @@ void lcd_update(LcdVals *lcd_vals)
   else return;
 }
 
+void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive motor 1
+{
+  static uint8_t state = 0;
+  static uint16_t stopped_millis = 0;
+  static uint32_t odrive_errors[5];
+  static uint8_t restart_retries=1;
+  static uint8_t cal_retries=1;
+  char serial_buf[100];
+
+  switch (state)
+  {
+  case 0:
+  {
+    sys_state.play_state = PAUSE;
+    Serial.println("[LOG]Comunicating with ODrive..."); //TODO Make a logging function.
+    state++;
+    break;
+  }
+  case 1:
+  {
+    Serial.println("[LOG]Checking ODrive errors...");
+    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    if(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)))
+    {
+      Serial.print("[WARN]ODrive error(s) detected: "); //TODO Make a warning function
+      print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
+      Serial.print(serial_buf);
+      if(restart_retries < MAX_RESTART_RETRIES)
+      {
+        snprintf(serial_buf, sizeof(serial_buf), "[LOG]Restarting ODrive... Try %d/%d", restart_retries++, MAX_RESTART_RETRIES);
+        Serial.println("[LOG]Restarting ODrive...");
+        restart_odrive(&odrive, &Serial2); //TODO Blocking!
+        break;
+      }
+      else
+      {
+        snprintf(serial_buf, sizeof(serial_buf), "[CRITICAL]Errors still detected after %d retries, entering fail mode", restart_retries); //TODO make a critial error function
+        Serial.println(serial_buf);
+        sys_state.play_state=FAIL;
+        break;
+      }
+    }
+    else
+    {
+      Serial.println("[LOG]No ODrive errors detected.");
+      restart_retries = 0;
+    }
+    Serial.println("[LOG]Starting full calibration sequence...");
+    int requested_state = ODriveArduino::AXIS_STATE_FULL_CALIBRATION_SEQUENCE;
+    if(odrive.run_state(1, requested_state, true)) //TODO Blocking!
+    {
+      Serial.println("[WARN]ODrive timed out, restarting..."); //TODO Max number of retries?
+      restart_odrive(&odrive, &Serial2);
+      break;
+    }
+    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    if(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)))
+    {
+      Serial.println("[WARN]ODrive error(s) detected while calibrating: "); //TODO Make a warning function
+      print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
+      Serial.println(serial_buf);
+      if(cal_retries < MAX_RESTART_RETRIES)
+      {
+        snprintf(serial_buf, sizeof(serial_buf), "[LOG]Retrying ODrive calibration... Try %d/%d", restart_retries++, MAX_RESTART_RETRIES);
+        Serial.println(serial_buf);
+        Serial.println("[LOG]Restarting ODrive...");
+        restart_odrive(&odrive, &Serial2); //TODO Blocking!
+        break;
+      }
+      else
+      {
+        snprintf(serial_buf, sizeof(serial_buf), "[CRITICAL]Errors still detected after %d calibration retries, entering fail mode", restart_retries); //TODO make a critial error function
+        Serial.println(serial_buf);
+        sys_state.play_state=FAIL;
+        break;
+      }
+    }
+    else
+    {
+      Serial.println("[LOG]No ODrive errors detected while calibrating.");
+      cal_retries = 0;
+      int requested_state = ODriveArduino::AXIS_STATE_IDLE;
+      odrive.run_state(1, requested_state, true);
+    }
+    state = 0;
+    odrive_cal_flag = true;
+    break;
+  }
+  case 2:
+  {
+  }
+  }
+}
+
+
 void calibrate()
 {
   static uint8_t state = 0;
   static uint16_t stopped_millis = 0;
   static uint32_t odrive_errors[5];
+  char serial_buf[100];
 
   switch (state)
   {
@@ -303,12 +405,14 @@ void calibrate()
   {
     Serial.println("Calibrating motor...");
     delay(10);
-    get_errors(&Serial2, &odrive, odrive_errors, sizeof(odrive_errors));
-    Serial.println(print_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
+    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    Serial.println(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
     int requested_state = ODriveArduino::AXIS_STATE_FULL_CALIBRATION_SEQUENCE;
     odrive.run_state(1, requested_state, true);
-    get_errors(&Serial2, &odrive, odrive_errors, sizeof(odrive_errors));
-    Serial.println(print_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
+    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    Serial.println(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
+    print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
+    Serial.println(serial_buf);
     state++;
     break;
   }
@@ -440,54 +544,69 @@ void hard_calibrate()
   }
 }
 
-void get_errors(HardwareSerial* Serial2, ODriveArduino* odrive, uint32_t odrive_errors[], uint32_t size)
+int8_t read_errors(HardwareSerial* Serial2, ODriveArduino* odrive, uint8_t motor_id, uint32_t odrive_errors[], uint32_t size)
 {
-  if (size != sizeof(uint32_t)*5) return;
-  Serial2->println("r axis1.error");
+  char serial_buff[40];
+  if (size != sizeof(uint32_t)*5 || motor_id > MAX_MOTOR_NUM) return -1;
+  snprintf(serial_buff, sizeof(serial_buff), "r axis%d.error", motor_id);
+  Serial2->println(serial_buff);
   odrive_errors[0] = odrive->readInt();
-  Serial2->println("r axis1.motor.error");
+  snprintf(serial_buff, sizeof(serial_buff), "r axis%d.motor.error", motor_id);
+  Serial2->println(serial_buff);
   odrive_errors[1] = odrive->readInt();
-  Serial2->println("r axis1.controller.error");
+  snprintf(serial_buff, sizeof(serial_buff), "r axis%d.controller.error", motor_id);
+  Serial2->println(serial_buff);
   odrive_errors[2] = odrive->readInt();
-  Serial2->println("r axis1.encoder.error");
+  snprintf(serial_buff, sizeof(serial_buff), "r axis%d.encoder.error", motor_id);
+  Serial2->println(serial_buff);
   odrive_errors[3] = odrive->readInt();
-  Serial2->println("r axis1.sensorless_estimator.error");
+  snprintf(serial_buff, sizeof(serial_buff), "r axis%d.sensorless_estimator.error", motor_id);
+  Serial2->println(serial_buff);
   odrive_errors[4] = odrive->readInt();
+  return 0;
 }
 
-uint8_t print_errors(HardwareSerial *Serial1, uint32_t odrive_errors[], uint32_t size)
+void restart_odrive(ODriveArduino* odrive, HardwareSerial* Serial2)
+{
+  Serial2->println("sr");
+  delay(10); //TODO No millis!
+  int requested_state = ODriveArduino::AXIS_STATE_IDLE;
+  odrive->run_state(1, requested_state, true); //TODO Blocking!
+}
+
+uint8_t get_errors(HardwareSerial *Serial1, uint32_t odrive_errors[], uint32_t size)
 {
   uint8_t return_code = 0;
   if (size != sizeof(uint32_t)*5) return 0xFF;
   if(odrive_errors[0])
   {
     return_code += 1;
-    Serial->print("Errors detected: ");
     if(odrive_errors[1])
     {
       return_code += 1<<1;
-      Serial->println("Motor error ");
     }
     if(odrive_errors[2])
     {
       return_code += 1<<2;
-      Serial->println("Controller error ");
     }
     if(odrive_errors[3])
     {
       return_code += 1<<3;
-      Serial->println("Encoder error ");
     }
     if(odrive_errors[4])
     {
       return_code += 1<<4;
-      Serial->println("Sensorless estimator error ");
     }
     return return_code;
   }
   else
   {
-    Serial->println("No errors detected");
-    return return_code;
+   return return_code;
   }
+}
+
+void print_errors_string(char serial_buf[], uint32_t serial_size, uint32_t odrive_errors[], uint32_t error_size)
+{
+  if (error_size != sizeof(uint32_t)*5) return;
+  snprintf(serial_buf, serial_size, "Axis error: %ld\nMotor error: %ld\nController error: %ld\nEncoder error: %ld\nSensorless Estimator error: %ld", odrive_errors[0], odrive_errors[1], odrive_errors[2], odrive_errors[3], odrive_errors[4]);
 }

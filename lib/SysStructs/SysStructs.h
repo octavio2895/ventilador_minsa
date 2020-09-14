@@ -127,7 +127,8 @@ enum PlayStates
 {
     STOP = 0,
     PAUSE = 1,
-    PLAY = 2
+    PLAY = 2,
+    FAIL = 3
 };
 
 struct SysState

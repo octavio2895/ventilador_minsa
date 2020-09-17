@@ -134,7 +134,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
   f->volume += (f->flow*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
-    f->angle = CLICKS_TO_RAD*RAD_TO_DEG*((e->getPosition()<<1) - init_angle);
+    f->angle = CLICKS_TO_RAD*RAD_TO_DEG*((e->getPosition()) - init_angle);
     f->pip = arr_top(top_pres, 64);
     memset(top_pres, 0, sizeof(top_pres));
     f->vti = f->volume;
@@ -145,7 +145,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
   {
     max_inspiration_flow = 0;
     f->peep = arr_average(exp_press, 16);
-    init_angle = (e->getPosition()<<1);
+    init_angle = (e->getPosition());
   }
 
   else if(s->cur_stage >= INS_1 && s->cur_stage <= INS_3) 

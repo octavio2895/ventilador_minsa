@@ -7,6 +7,8 @@
 #include "WProgram.h"
 #endif
 
+#include <ODriveArduino.h>
+
 #define K1                    120//85
 #define K2                    0.5 //4
 #define K3                    300
@@ -27,7 +29,8 @@
 #define GAIN_POINT_0          0.39
 #define GAIN_POINT_1          0.8
 
-#define USE_FLUTTER_PRINTS
+// #define USE_FLUTTER_PRINTS
+#define INVERTED_SPEED
 
 // TODO: Review why this works
 
@@ -87,23 +90,27 @@ struct ControlVals
 
 struct MotorDynamics
 {
-  int16_t lower_limit = 0;
-  int16_t upper_limit;
-  int16_t current_pos = 0;
+  HardwareSerial* serial_out;
+  ODriveArduino* odrive;
+  int32_t lower_limit = 0;
+  int32_t upper_limit;
+  int32_t current_pos = 0;
   double current_ang_pos = 0;
   double target_pos;
   double current_vel;
   double target_vel;
   uint16_t output_range = 256;
   int16_t output;
-  volatile uint32_t click_time = 1; // Avoid div 0
+  volatile uint32_t click_time = 1; // Avoid div /0
   volatile bool click_dir;
   int16_t dir_pin;
   int16_t pwm_pin;
+  double motor_volts;
+  int16_t axis;
 };
 
 
-enum Stages
+enum Stages //Stages of respiration
 {
   INS_1 = 0,
   INS_2 = 1,
@@ -128,17 +135,23 @@ enum PlayStates
     STOP = 0,
     PAUSE = 1,
     PLAY = 2,
-    FAIL = 3
+    CAL = 3,
+    ODRIVE_CAL = 4,
+    FAIL = 5
 };
 
 struct SysState
 {
     PlayStates play_state = PAUSE;
     bool cal_flag = 0;
+    bool odrive_cal_flag = 0;
     bool plot_enable = 0;
     bool params_change_flag = 0;
     bool restart_step_flag = 0;
     bool limit_switch_state = 0;
+    bool find_home = 0;
+    bool homed = 0;
+    bool zeroed = 0;
 };
 
 

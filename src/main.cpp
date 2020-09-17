@@ -41,7 +41,7 @@
 #define MAX_X                 4
 #define MIN_X                 1
 #define CURRENT_COLLISION_THRESHOLD                200
-#define AMBU_OPEN_ANGLE       55
+#define AMBU_OPEN_ANGLE       70
 
 // Update rates.
 #define MOTOR_UPDATE_DELAY    10
@@ -54,11 +54,16 @@
 #define PRES_CAL_DELAY        100
 #define SENSOR_UDPATE_DELAY   5
 #define PLOT_UPDATE_DELAY     5
+#define ERROR_UPDATE_DELAY    100
 
 // Parameter
 #define MAX_ADC_RESOLUTION    16
 #define MAX_MOTOR_NUM         1
 #define MAX_RESTART_RETRIES   3
+#define MAX_ODRIVE_CAL_RETRIES 3
+#define LIMIT_SWITCH_LOGIC    1
+#define HOMING_SPEED          50
+
 
 
 struct LcdVals
@@ -91,14 +96,15 @@ ODriveArduino odrive(Serial2);
 double y_0 = 0.51;
 double y_1 = 0.58;
 bool h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pres_cal_fail = 0, reset_flag = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle, next_error_update;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep, max_ins_flow, max_exp_flow;
-bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1;
+bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1, odrive_errors_update_enable = 0;
 double k_vol = 0.3;
 int32_t zero_position = 0;
-bool odrive_cal_flag;
+uint32_t odrive_errors[5];
+int32_t curr_enc_pos;
 
-RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1);
+RotaryEncoder encoder(PIN_ENCODER_A, PIN_ENCODER_B, PB1);
 
 // Global objects.
 LiquidCrystal_I2C lcd(PCF8574_ADDR_A21_A11_A01, 4, 5, 6, 16, 11, 12, 13, 14, POSITIVE);  // Set the LCD I2C address
@@ -118,12 +124,18 @@ uint8_t get_errors(HardwareSerial*, uint32_t*, uint32_t);
 void print_errors_string(char serial_buff[], uint32_t serial_size, uint32_t odrive_errors[], uint32_t error_size);
 void restart_odrive(ODriveArduino* odrive, HardwareSerial* Serial2);
 void odrive_cal(uint8_t motor);
+void handle_odrive_error();
+void go_home();
+void move_arm_to(int32_t);
 
 
 void setup()
 {
+  motor_vals.serial_out = &Serial2;
+  motor_vals.odrive = &odrive;
+  motor_vals.axis = 0;
   pinMode(LED_BUILTIN, OUTPUT);
-  pinMode(PIN_LIMIT_SWITCH, INPUT_PULLUP);
+  pinMode(PIN_LIMIT_SWITCH, INPUT_PULLDOWN);
   pinMode(PIN_PWM, OUTPUT_OPEN_DRAIN);
   pinMode(PIN_DIR, OUTPUT_OPEN_DRAIN);
   digitalWrite(PIN_PWM, 0);
@@ -154,8 +166,18 @@ void setup()
 void loop() 
 {
   BlinkLED();
-  if(!odrive_cal_flag) odrive_cal(1);
-  if(!h_cal_flag) hard_calibrate();
+  if(!sys_state.odrive_cal_flag) odrive_cal(0);
+  if(!sys_state.cal_flag && sys_state.odrive_cal_flag) calibrate();
+
+  if (odrive_errors_update_enable && millis() > next_error_update)
+  {
+
+    if(read_errors(&Serial2, &odrive, 0, odrive_errors, sizeof(odrive_errors)))
+    {
+      handle_odrive_error();
+    }
+    next_error_update = millis() + ERROR_UPDATE_DELAY;
+  }
 
   if (sensor_update_enable && millis() > next_sensor_update)
   {
@@ -163,7 +185,7 @@ void loop()
     read_pressure_2(&pres_1, &current_flow);
     calculate_flow_oplate(&current_flow);
     calculate_flow_state(&step, &sys_state, &encoder, &curve_vals, &current_flow);
-    flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
+    //flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
 
@@ -179,11 +201,12 @@ void loop()
     next_plot_update = millis() + PLOT_UPDATE_DELAY;
   }
 
-  if(motor_control_enable && millis()>next_motor_update && sys_state.play_state != STOP && sys_state.cal_flag)
+  if(motor_control_enable && millis()>next_motor_update && (sys_state.play_state == PLAY || sys_state.play_state==PAUSE) && sys_state.cal_flag)
   {
     calc_step(&step, &sys_state, &curve_vals);
     read_motor(&motor_vals, &encoder);
     generate_curve(&step, &sys_state, &motor_vals, &curve_vals);
+    curr_enc_pos=encoder.getPosition();
     mimo_control(&motor_vals, &control_vals, &step);
     filter_motor(&motor_vals);
     execute_motor(&sys_state, &motor_vals);
@@ -269,11 +292,11 @@ void limitswitchISR() // TODO: Find better debouncing method
   if(!digitalRead(PIN_LIMIT_SWITCH))
   {
     motor_write(&motor_vals, 0);
-    sys_state.limit_switch_state = 1;
+    sys_state.limit_switch_state = LIMIT_SWITCH_LOGIC;
   }
   else 
   {
-    sys_state.limit_switch_state = 0;
+    sys_state.limit_switch_state = !LIMIT_SWITCH_LOGIC;
   }
 }
 
@@ -290,10 +313,10 @@ void lcd_update(LcdVals *lcd_vals)
   else return;
 }
 
-void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive motor 1
+//TODO add check for limit switch trigger
+void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive motor
 {
   static uint8_t state = 0;
-  static uint16_t stopped_millis = 0;
   static uint32_t odrive_errors[5];
   static uint8_t restart_retries=1;
   static uint8_t cal_retries=1;
@@ -301,32 +324,35 @@ void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive m
 
   switch (state)
   {
-  case 0:
+  case 0: //Init calibration
   {
-    sys_state.play_state = PAUSE;
-    Serial.println("[LOG]Comunicating with ODrive..."); //TODO Make a logging function.
+    sys_state.play_state = ODRIVE_CAL;
+    sys_state.cal_flag = false; //Makes sure calibration is not running while the ODrive is calibrating
+    odrive_errors_update_enable = 0;
+    Serial.println("[LOG]Starting ODrive calibration routine."); //TODO Make a logging function.
     state++;
     break;
   }
-  case 1:
+  case 1: //Check for init errors
   {
     Serial.println("[LOG]Checking ODrive errors...");
-    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    read_errors(&Serial2, &odrive, 0, odrive_errors, sizeof(odrive_errors));
     if(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)))
     {
       Serial.print("[WARN]ODrive error(s) detected: "); //TODO Make a warning function
       print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
       Serial.print(serial_buf);
-      if(restart_retries < MAX_RESTART_RETRIES)
+      if(restart_retries <= MAX_RESTART_RETRIES)
       {
         snprintf(serial_buf, sizeof(serial_buf), "[LOG]Restarting ODrive... Try %d/%d", restart_retries++, MAX_RESTART_RETRIES);
+        Serial.println(serial_buf);
         Serial.println("[LOG]Restarting ODrive...");
         restart_odrive(&odrive, &Serial2); //TODO Blocking!
         break;
       }
       else
       {
-        snprintf(serial_buf, sizeof(serial_buf), "[CRITICAL]Errors still detected after %d retries, entering fail mode", restart_retries); //TODO make a critial error function
+        snprintf(serial_buf, sizeof(serial_buf), "[CRITICAL]Errors still detected after %d retries. Entering failmode", restart_retries); //TODO make a critial error function
         Serial.println(serial_buf);
         sys_state.play_state=FAIL;
         break;
@@ -336,27 +362,35 @@ void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive m
     {
       Serial.println("[LOG]No ODrive errors detected.");
       restart_retries = 0;
+      state++;
+      break;
     }
+  }
+  case 2: //Start cal
+  {
     Serial.println("[LOG]Starting full calibration sequence...");
     int requested_state = ODriveArduino::AXIS_STATE_FULL_CALIBRATION_SEQUENCE;
-    if(odrive.run_state(1, requested_state, true)) //TODO Blocking!
+    if(odrive.run_state(motor, requested_state, true)) //TODO Blocking!
     {
       Serial.println("[WARN]ODrive timed out, restarting..."); //TODO Max number of retries?
       restart_odrive(&odrive, &Serial2);
+      state--;
       break;
     }
-    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
+    delay(5000); //TODO Verify calibration completion.
+    read_errors(&Serial2, &odrive, 0, odrive_errors, sizeof(odrive_errors));
     if(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)))
     {
       Serial.println("[WARN]ODrive error(s) detected while calibrating: "); //TODO Make a warning function
       print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
       Serial.println(serial_buf);
-      if(cal_retries < MAX_RESTART_RETRIES)
+      if(cal_retries <= MAX_ODRIVE_CAL_RETRIES)
       {
-        snprintf(serial_buf, sizeof(serial_buf), "[LOG]Retrying ODrive calibration... Try %d/%d", restart_retries++, MAX_RESTART_RETRIES);
+        snprintf(serial_buf, sizeof(serial_buf), "[LOG]Retrying ODrive calibration... Try %d/%d", cal_retries++, MAX_ODRIVE_CAL_RETRIES);
         Serial.println(serial_buf);
         Serial.println("[LOG]Restarting ODrive...");
         restart_odrive(&odrive, &Serial2); //TODO Blocking!
+        state--;
         break;
       }
       else
@@ -364,6 +398,7 @@ void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive m
         snprintf(serial_buf, sizeof(serial_buf), "[CRITICAL]Errors still detected after %d calibration retries, entering fail mode", restart_retries); //TODO make a critial error function
         Serial.println(serial_buf);
         sys_state.play_state=FAIL;
+        state = 0;
         break;
       }
     }
@@ -371,174 +406,152 @@ void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive m
     {
       Serial.println("[LOG]No ODrive errors detected while calibrating.");
       cal_retries = 0;
-      int requested_state = ODriveArduino::AXIS_STATE_IDLE;
-      odrive.run_state(1, requested_state, true);
+      int requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
+      odrive.run_state(motor, requested_state, true);
     }
     state = 0;
-    odrive_cal_flag = true;
+    sys_state.odrive_cal_flag = true;
+    odrive_errors_update_enable = true;
+    sys_state.play_state = PAUSE; //Ready to start.
     break;
   }
-  case 2:
+  case 3:
   {
   }
   }
 }
 
+void handle_odrive_error() //TODO add critical fail alarm
+{
+  Serial.println("[CRITICAL]ODrive error during operation. Entering failmode.");
+  sys_state.play_state=FAIL;
+}
+
+void go_home()
+{
+  static bool init = 0;
+  if(!init)
+  {
+    sys_state.play_state = CAL;
+    Serial.println("[LOG]Homing arm...");
+    init = !init;
+  }
+  if(!digitalRead(PIN_LIMIT_SWITCH)) //TODO timeout.
+  {
+    odrive_speed_write(&motor_vals, -HOMING_SPEED);
+  }
+  else
+  {
+    odrive_speed_write(&motor_vals, 0);
+    Serial.println("[LOG]Arm successfully homed.");
+    sys_state.homed=true;
+    init = 0;
+  }
+}
+
+void move_arm_to(int32_t pos)
+{
+  static bool init = 0;
+  char serial_buf[50];
+  if(!init)
+  {
+    sys_state.play_state = CAL;
+    Serial.println("[LOG]Moving arm to set position...");
+    init = !init;
+  }
+  if(encoder.getPosition() > pos+1000) //TODO timeout.
+  {
+    odrive_speed_write(&motor_vals, -HOMING_SPEED);
+  }
+  else if(encoder.getPosition() < pos-1000) //TODO timeout.
+  {
+    odrive_speed_write(&motor_vals, HOMING_SPEED);
+  }
+  else
+  {
+    odrive_speed_write(&motor_vals, 0);
+    Serial.println("[LOG]Arm successfully reached postion successfully.");
+    sys_state.homed=true;
+    init = 0;
+  }
+}
 
 void calibrate()
 {
   static uint8_t state = 0;
-  static uint16_t stopped_millis = 0;
-  static uint32_t odrive_errors[5];
   char serial_buf[100];
+  static int32_t zero, closed, home_pos;
 
   switch (state)
   {
   case 0:
   {
-    sys_state.play_state = PAUSE;
-    Serial.println("Comunicating with ODrive...");
+    sys_state.play_state = CAL;
+    sys_state.zeroed = false;
+    sys_state.homed = false;
+    int requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
+    odrive.run_state(0, requested_state, true);
+    Serial.println("[LOG]Starting arm calibration routine.");
+    Serial.println("[LOG]Finding open limit.");
     state++;
     break;
   }
   case 1:
   {
-    Serial.println("Calibrating motor...");
-    delay(10);
-    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
-    Serial.println(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
-    int requested_state = ODriveArduino::AXIS_STATE_FULL_CALIBRATION_SEQUENCE;
-    odrive.run_state(1, requested_state, true);
-    read_errors(&Serial2, &odrive, 1, odrive_errors, sizeof(odrive_errors));
-    Serial.println(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)));
-    print_errors_string(serial_buf, sizeof(serial_buf), odrive_errors, sizeof(odrive_errors));
-    Serial.println(serial_buf);
-    state++;
+    if(!sys_state.homed)go_home();
+    else state++;
     break;
   }
   case 2:
   {
-    Serial.println(" Done!");
-    Serial.println(encoder.getPosition()<<1);
     encoder.setPosition(0);
-    zero_position = (encoder.getPosition()<<1) + ZERO_OFFSET;
-    Serial.println(zero_position);
-    stopped_millis = millis() + 5000;
+    zero = encoder.getPosition();
+    snprintf(serial_buf, sizeof(serial_buf), "[LOG]Open limit saved at: %d", zero);
+    Serial.println(serial_buf);
+    Serial.println("[LOG]Place arm in closed position. Send ZERO when ready...");
+    int requested_state = ODriveArduino::AXIS_STATE_IDLE;
+    odrive.run_state(0, requested_state, true);
     state++;
-    calibrate_pressure_sensor(&pres_0);
     break;
   }
   case 3:
   {
-    if(millis() > stopped_millis) 
+    if(sys_state.zeroed)
     {
-      Serial.print("Going to zero...");
+      closed = encoder.getPosition();
+      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Closed limit saved at: %d", closed);
+      Serial.println(serial_buf);
+      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Total range is: %ld", (int32_t)(0.004392294*((double)(closed-zero))));
+      Serial.println(serial_buf);
+      home_pos = (closed-zero)-(int32_t)(AMBU_OPEN_ANGLE*227.5555); //TODO handle case when range is too low
+      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Goal: %ld Current: %ld", home_pos, encoder.getPosition());
+      Serial.println(serial_buf);
+      Serial.println("[LOG]Going to open position");
+      sys_state.homed = false;
+      int requested_state = ODriveArduino::AXIS_STATE_CLOSED_LOOP_CONTROL;
+      odrive.run_state(0, requested_state, true);
       state++;
+      // sys_state.cal_flag=true;
+      // state = 0;
     }
     break;
   }
   case 4:
   {
-    if(((encoder.getPosition()<<1) - zero_position) < 0)
-    {
-      // Serial.println((encoder.getPosition()<<1) - zero_position);
-      motor_write(&motor_vals, MIN_VEL);
-    }
-    else
-    {
-      state++;
-      motor_write(&motor_vals, 0);
-    }
+    // snprintf(serial_buf, sizeof(serial_buf), "[LOG]Goal: %ld Current: %ld", ((closed-zero)-(int32_t)(AMBU_OPEN_ANGLE*227.5555)), encoder.getPosition());
+    // Serial.println(serial_buf);
+    if(!sys_state.homed)move_arm_to(home_pos);
+    else state++;
     break;
   }
   case 5:
   {
-    Serial.println(" Done!");
-    sys_state.cal_flag = 1;
+    sys_state.cal_flag=true;
     state = 0;
+    Serial.println("[LOG]Arm successfully calibrated.");
+    Serial.println(encoder.getPosition());
     break;
   }
-  default:
-    break;
-  }
-}
-
-void hard_calibrate()
-{
-  static uint8_t state = 0;
-  static uint16_t stopped_millis = 0;
-
-  switch (state)
-  {
-  case 0:
-    sys_state.play_state = PAUSE;
-    Serial.println("Performing hard calibration...");
-    state++;
-    break;
-  case 1:
-    if(digitalRead(PIN_LIMIT_SWITCH))
-    {
-      motor_write(&motor_vals, -MIN_VEL);
-    }
-    else
-    {
-      state++;
-      motor_write(&motor_vals, 0);
-    }
-    break;
-  case 2:
-    Serial.println(" Done!");
-    Serial.println(encoder.getPosition()<<1);
-    encoder.setPosition(0);
-    // zero_position = (encoder.getPosition()<<1) + ZERO_OFFSET;
-    // Serial.println(zero_position);
-    stopped_millis = millis() + 5000;
-    state++;
-    break;
-  case 3:
-    if(millis() > stopped_millis) 
-    {
-      Serial.print("Going to upper limit...");
-      state++;
-    }
-    break;
-  // case 4:
-  // {
-  //   uint32_t current_adc = analogRead(PIN_CURRENT_SENSE);
-  //   if(current_adc < CURRENT_COLLISION_THRESHOLD)
-  //   {
-  //     Serial.println((encoder.getPosition()<<1) - zero_position);
-  //     Serial.println(current_adc);
-  //     motor_write(MIN_VEL);
-  //   }
-  //   else
-  //   {
-  //     motor_write(0);
-  //     state++;
-  //     Serial.print("Upper limit: ");
-  //     Serial.println(encoder.getPosition());
-  //     zero_position = encoder.getPosition() - AMBU_OPEN_ANGLE*DEG_TO_RAD*RAD_TO_CLICK;
-  //     Serial.println("Going to zero...");
-  //   }
-  //   break;
-  // }
-  case 5:
-    if(((encoder.getPosition()<<1) - zero_position) > 0)
-    {
-      Serial.println((encoder.getPosition()<<1) - zero_position);
-      motor_write(&motor_vals, -MIN_VEL);
-    }
-    else
-    {
-      state++;
-      motor_write(&motor_vals, 0);
-    }
-    break;
-  case 6:
-    Serial.println(" Done!");
-    h_cal_flag = 1;
-    state = 0;
-    break;
   default:
     break;
   }
@@ -571,7 +584,7 @@ void restart_odrive(ODriveArduino* odrive, HardwareSerial* Serial2)
   Serial2->println("sr");
   delay(10); //TODO No millis!
   int requested_state = ODriveArduino::AXIS_STATE_IDLE;
-  odrive->run_state(1, requested_state, true); //TODO Blocking!
+  odrive->run_state(0, requested_state, true); //TODO Blocking!
 }
 
 uint8_t get_errors(HardwareSerial *Serial1, uint32_t odrive_errors[], uint32_t size)
@@ -597,7 +610,7 @@ uint8_t get_errors(HardwareSerial *Serial1, uint32_t odrive_errors[], uint32_t s
     {
       return_code += 1<<4;
     }
-    return return_code;
+    return 1;
   }
   else
   {

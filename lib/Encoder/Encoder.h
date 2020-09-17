@@ -10,7 +10,7 @@
 #define RAD_TO_CLICK          (ENCODER_CPR/2*PI)
 #define PIN_ENCODER_A         PA7
 #define PIN_ENCODER_B         PA6
-#define ENCODER_CPR           8000
+#define ENCODER_CPR           81920
 
 // extern RotaryEncoder encoder(PIN_ENCODER_B, PIN_ENCODER_A, PB1)
 extern int32_t zero_position;

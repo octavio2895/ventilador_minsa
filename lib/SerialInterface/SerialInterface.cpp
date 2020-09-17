@@ -145,6 +145,10 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
   Serial.print(" ");
   Serial.print(m->target_pos, 4);
   Serial.print(" ");
+  Serial.print(m->current_pos);
+  Serial.print(" ");
+  Serial.print(m->motor_volts, 4);
+  Serial.print(" ");
   Serial.print(m->current_vel, 4);
   Serial.print(" ");
   Serial.print(m->target_vel, 4);
@@ -200,6 +204,10 @@ void parse_params(char buf[], unsigned long size, SysState *sys, ControlVals *co
   else if(!strcmp(cmd, "PLOT"))
   {
     sys->plot_enable = !sys->plot_enable;
+  }
+  else if(!strcmp(cmd, "ZERO"))
+  {
+    sys->zeroed = true;
   }
   else if(!strcmp(cmd, "PRINTP"))
   {

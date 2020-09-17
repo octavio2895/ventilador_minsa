@@ -14,6 +14,7 @@
 #include <SysState.h>
 #include <SysStructs.h>
 
+
 void print_curve_data(CurveParams *);
 void plot_data(StepInfo *, CurveParams *, MotorDynamics *, FlowData *);
 void parse_params(char*, unsigned long, SysState*, ControlVals*, CurveParams*, CurveParams*);

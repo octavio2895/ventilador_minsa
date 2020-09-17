@@ -9,6 +9,7 @@
 
 #include <Encoder.h>
 #include <SysStructs.h>
+#include <ODriveArduino.h>
 
 #define KP_MAX                  300
 #define KP_MIN                  0
@@ -42,5 +43,6 @@ double calculate_angular_velocity_fod3(MotorDynamics *m);
 double calculate_angular_velocity(MotorDynamics *m);
 int16_t calculate_position(RotaryEncoder *e);
 double interpolate_gains(double);
+void odrive_speed_write(MotorDynamics *m, double vel);
 
 #endif

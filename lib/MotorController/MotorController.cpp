@@ -85,9 +85,21 @@ void motor_write(MotorDynamics *m, double pwm)
   analogWrite(m->pwm_pin, abs(pwm));
 }
 
+void odrive_speed_write(MotorDynamics *m, double vel)
+{
+  char serial_buf[100];
+  #ifdef INVERTED_SPEED
+  snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int16_t)-vel);
+  #else
+  snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int16_t)vel);
+  #endif
+  m->serial_out->println(serial_buf);
+}
+
 void read_motor(MotorDynamics *m, RotaryEncoder *e)
 {
-  m->current_pos = (double) ((e->getPosition()<<1) - zero_position);
+  m->current_pos = (int32_t)(e->getPosition());
+  Serial.println(m->current_pos);
   m->current_ang_pos = CLICKS_TO_RAD * m->current_pos;
   m->current_vel = calculate_angular_velocity(m);
 }
@@ -111,12 +123,15 @@ void filter_motor(MotorDynamics *m)
 
 void execute_motor(SysState *sys, MotorDynamics *m)
 {
-  if (sys->play_state == PAUSE || sys->limit_switch_state)
+  if (sys->play_state == PAUSE)
   {
-    analogWrite(m->pwm_pin, 0);
+    odrive_speed_write(m, 0);
     return;
   }
-  else motor_write(m, m->output);
+  else
+  {
+    odrive_speed_write(m, m->output);
+  }
 }
 
 void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
@@ -124,16 +139,16 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   static double error_position;
   static double error_velocity;
   static double motor_volts;
-  double kp = 250*m->current_ang_pos + 120;
+  double kp = 50;//*m->current_ang_pos + 120;
 
   //Calculate error
   error_position = m->target_pos - m->current_ang_pos;
   error_velocity = m->target_vel - m->current_vel;
-  if(s->cur_stage >= REST_1) kp = K1;
+  // if(s->cur_stage >= REST_1) kp = K1;
   // kp = interpolate_gains(m->current_ang_pos);
 
-  motor_volts = kp * error_position;
-  m->output = fmap(motor_volts, 0, 12, 0, MAX_PWM);
+  m->motor_volts = kp * error_position;
+  m->output = fmap(m->motor_volts, 0, 12, 0, MAX_PWM);
 
 }
 double interpolate_gains(double ang)

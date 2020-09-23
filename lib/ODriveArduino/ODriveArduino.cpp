@@ -72,12 +72,12 @@ bool ODriveArduino::run_state(int axis, int requested_state, bool wait) {
     return timeout_ctr > 0;
 }
 
-String ODriveArduino::readString() {
+String ODriveArduino::readString() { //TODO Eliminate String lib dependency
     String str = "";
     static const unsigned long timeout = 1000;
     unsigned long timeout_start = millis();
     for (;;) {
-        while (!serial_.available()) {
+        while (!serial_.available()) { //TODO Blocking!
             if (millis() - timeout_start >= timeout) {
                 return str;
             }

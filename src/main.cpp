@@ -62,7 +62,8 @@
 #define MAX_RESTART_RETRIES   3
 #define MAX_ODRIVE_CAL_RETRIES 3
 #define LIMIT_SWITCH_LOGIC    1
-#define HOMING_SPEED          50
+#define HOMING_SPEED          5000
+#define HOME_DZ               1000
 
 
 
@@ -139,10 +140,10 @@ void setup()
   pinMode(PIN_PWM, OUTPUT_OPEN_DRAIN);
   pinMode(PIN_DIR, OUTPUT_OPEN_DRAIN);
   digitalWrite(PIN_PWM, 0);
-  encoder.begin();
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH), limitswitchISR, CHANGE);
+  // encoder.begin();
+  // attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
+  // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH), limitswitchISR, CHANGE);
   sys_state.limit_switch_state = !digitalRead(PIN_LIMIT_SWITCH);
   #ifdef SCREEN
   lcd.begin(16, 2, LCD_5x8DOTS);
@@ -184,7 +185,7 @@ void loop()
     read_pressure(&pres_0, &current_flow);
     read_pressure_2(&pres_1, &current_flow);
     calculate_flow_oplate(&current_flow);
-    calculate_flow_state(&step, &sys_state, &encoder, &curve_vals, &current_flow);
+    calculate_flow_state(&step, &sys_state, &odrive, &curve_vals, &current_flow);
     //flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
@@ -204,9 +205,8 @@ void loop()
   if(motor_control_enable && millis()>next_motor_update && (sys_state.play_state == PLAY || sys_state.play_state==PAUSE) && sys_state.cal_flag)
   {
     calc_step(&step, &sys_state, &curve_vals);
-    read_motor(&motor_vals, &encoder);
+    read_motor(&motor_vals, &odrive);
     generate_curve(&step, &sys_state, &motor_vals, &curve_vals);
-    curr_enc_pos=encoder.getPosition();
     mimo_control(&motor_vals, &control_vals, &step);
     filter_motor(&motor_vals);
     execute_motor(&sys_state, &motor_vals);
@@ -449,7 +449,7 @@ void go_home()
   }
 }
 
-void move_arm_to(int32_t pos)
+void move_arm_to(uint8_t axis, int32_t pos)
 {
   static bool init = 0;
   char serial_buf[50];
@@ -459,11 +459,11 @@ void move_arm_to(int32_t pos)
     Serial.println("[LOG]Moving arm to set position...");
     init = !init;
   }
-  if(encoder.getPosition() > pos+1000) //TODO timeout.
+  if(odrive_read_encoder(&Serial2, &odrive, 0) > pos+HOME_DZ) //TODO timeout.
   {
     odrive_speed_write(&motor_vals, -HOMING_SPEED);
   }
-  else if(encoder.getPosition() < pos-1000) //TODO timeout.
+  else if(odrive_read_encoder(&Serial2, &odrive, 0) < pos-HOME_DZ) //TODO timeout.
   {
     odrive_speed_write(&motor_vals, HOMING_SPEED);
   }
@@ -504,8 +504,8 @@ void calibrate()
   }
   case 2:
   {
-    encoder.setPosition(0);
-    zero = encoder.getPosition();
+    // encoder.setPosition(0);
+    zero = odrive_read_encoder(&Serial2, &odrive, 0);
     snprintf(serial_buf, sizeof(serial_buf), "[LOG]Open limit saved at: %d", zero);
     Serial.println(serial_buf);
     Serial.println("[LOG]Place arm in closed position. Send ZERO when ready...");
@@ -518,13 +518,13 @@ void calibrate()
   {
     if(sys_state.zeroed)
     {
-      closed = encoder.getPosition();
+      closed = odrive_read_encoder(&Serial2, &odrive, ARM_AXIS);
       snprintf(serial_buf, sizeof(serial_buf), "[LOG]Closed limit saved at: %d", closed);
       Serial.println(serial_buf);
-      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Total range is: %ld", (int32_t)(0.004392294*((double)(closed-zero))));
+      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Total range is: %ld", (int32_t)(CLICKS_TO_RAD*RAD_TO_DEG*((double)(closed-zero))));
       Serial.println(serial_buf);
-      home_pos = (closed-zero)-(int32_t)(AMBU_OPEN_ANGLE*227.5555); //TODO handle case when range is too low
-      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Goal: %ld Current: %ld", home_pos, encoder.getPosition());
+      home_pos = (closed)-(int32_t)(AMBU_OPEN_ANGLE*0.017453293*RAD_TO_CLICK); //TODO handle case when range is too low
+      snprintf(serial_buf, sizeof(serial_buf), "[LOG]Goal: %ld Current: %ld", home_pos, odrive_read_encoder(&Serial2, &odrive, ARM_AXIS));
       Serial.println(serial_buf);
       Serial.println("[LOG]Going to open position");
       sys_state.homed = false;
@@ -540,7 +540,7 @@ void calibrate()
   {
     // snprintf(serial_buf, sizeof(serial_buf), "[LOG]Goal: %ld Current: %ld", ((closed-zero)-(int32_t)(AMBU_OPEN_ANGLE*227.5555)), encoder.getPosition());
     // Serial.println(serial_buf);
-    if(!sys_state.homed)move_arm_to(home_pos);
+    if(!sys_state.homed)move_arm_to(ARM_AXIS, home_pos);
     else state++;
     break;
   }
@@ -549,7 +549,7 @@ void calibrate()
     sys_state.cal_flag=true;
     state = 0;
     Serial.println("[LOG]Arm successfully calibrated.");
-    Serial.println(encoder.getPosition());
+    Serial.println(odrive_read_encoder(&Serial2, &odrive, ARM_AXIS));
     break;
   }
   default:

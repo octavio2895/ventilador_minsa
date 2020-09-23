@@ -28,6 +28,7 @@
 #define BREATH_PAUSE          0
 #define GAIN_POINT_0          0.39
 #define GAIN_POINT_1          0.8
+#define ARM_AXIS              0
 
 // #define USE_FLUTTER_PRINTS
 #define INVERTED_SPEED
@@ -100,7 +101,7 @@ struct MotorDynamics
   double current_vel;
   double target_vel;
   uint16_t output_range = 256;
-  int16_t output;
+  int32_t output;
   volatile uint32_t click_time = 1; // Avoid div /0
   volatile bool click_dir;
   int16_t dir_pin;

@@ -28,7 +28,7 @@
 //Experiment
 #define FILTER                0
 #define FILTER_PWM            0
-#define MAX_PWM               256
+#define MAX_PWM               80000
 
 
 int8_t k_check(double, double, double);
@@ -36,12 +36,12 @@ double fmap(double in, double in_min, double in_max, double out_min, double out_
 void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s);
 void execute_motor(SysState *sys, MotorDynamics *m);
 void filter_motor(MotorDynamics *m);
-void read_motor(MotorDynamics *m, RotaryEncoder *e);
+void read_motor(MotorDynamics *m, ODriveArduino *e);
 void motor_write(MotorDynamics *m, double);
 int16_t calculate_angular_acceleration(double ang_vel);
 double calculate_angular_velocity_fod3(MotorDynamics *m);
 double calculate_angular_velocity(MotorDynamics *m);
-int16_t calculate_position(RotaryEncoder *e);
+int32_t calculate_position(ODriveArduino *e);
 double interpolate_gains(double);
 void odrive_speed_write(MotorDynamics *m, double vel);
 

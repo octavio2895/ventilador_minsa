@@ -18,9 +18,9 @@ int8_t k_check(double stage, double kp, double kv)
 }
 
 
-int16_t calculate_position(RotaryEncoder *e)
+int32_t calculate_position(ODriveArduino *o)
 {
-  int16_t pos = e->getPosition()<<1 - zero_position;
+  int32_t pos = odrive_read_encoder(&Serial2, o, ARM_AXIS);
   return pos;
 }
 
@@ -89,17 +89,17 @@ void odrive_speed_write(MotorDynamics *m, double vel)
 {
   char serial_buf[100];
   #ifdef INVERTED_SPEED
-  snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int16_t)-vel);
+  snprintf(serial_buf, sizeof(serial_buf),"v %d %ld", m->axis,(int32_t)-vel);
   #else
   snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int16_t)vel);
   #endif
   m->serial_out->println(serial_buf);
 }
 
-void read_motor(MotorDynamics *m, RotaryEncoder *e)
+void read_motor(MotorDynamics *m, ODriveArduino *o) //TODO Encapsulate ODrive into MotorDynamics
 {
-  m->current_pos = (int32_t)(e->getPosition());
-  Serial.println(m->current_pos);
+  m->current_pos = odrive_read_encoder(&Serial2, o, ARM_AXIS);
+  // Serial.println(m->current_pos);
   m->current_ang_pos = CLICKS_TO_RAD * m->current_pos;
   m->current_vel = calculate_angular_velocity(m);
 }
@@ -107,8 +107,8 @@ void read_motor(MotorDynamics *m, RotaryEncoder *e)
 void filter_motor(MotorDynamics *m)
 {
   static double prev_pwm;
-  m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1); // TODO: Review this
-  prev_pwm = m->output;
+  // m->output = (m->output + prev_pwm * FILTER_PWM) / (FILTER_PWM + 1); // TODO: Review this
+  // prev_pwm = m->output;
   
   if(m->output > MAX_PWM)
   {
@@ -139,7 +139,7 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   static double error_position;
   static double error_velocity;
   static double motor_volts;
-  double kp = 50;//*m->current_ang_pos + 120;
+  double kp = 120000;//*m->current_ang_pos + 120;
 
   //Calculate error
   error_position = m->target_pos - m->current_ang_pos;
@@ -147,8 +147,10 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
   // if(s->cur_stage >= REST_1) kp = K1;
   // kp = interpolate_gains(m->current_ang_pos);
 
-  m->motor_volts = kp * error_position;
-  m->output = fmap(m->motor_volts, 0, 12, 0, MAX_PWM);
+  // m->motor_volts = kp * error_position;
+  // m->output = fmap(m->motor_volts, 0, 12, MAX_PWM, -MAX_PWM);
+  m->output = kp * error_position;
+  // Serial.println(m->output);
 
 }
 double interpolate_gains(double ang)

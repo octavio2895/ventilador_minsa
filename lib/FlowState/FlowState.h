@@ -36,7 +36,7 @@ void calculate_flow_oplate(FlowData *);
 int16_t calibrate_pressure_sensor(PressureSensor *);
 double arr_average(int16_t *, uint16_t);
 double arr_top(double *, uint16_t);
-void calculate_flow_state(StepInfo *, SysState *, RotaryEncoder *, CurveParams *, FlowData *);
+void calculate_flow_state(StepInfo *, SysState *, ODriveArduino *, CurveParams *, FlowData *);
 void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *c, CurveParams *n, FlowData *f);
 double deg_to_vol(double);
 double vol_to_deg(double);

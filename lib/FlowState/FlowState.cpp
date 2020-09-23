@@ -94,11 +94,11 @@ int16_t calibrate_pressure_sensor(PressureSensor *p)
   return ((int16_t)average);
 }
 
-void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurveParams *c,  FlowData *f) // TODO: Change to state machine, refactor the shit out of this
+void calculate_flow_state(StepInfo *s, SysState *sys, ODriveArduino *o, CurveParams *c,  FlowData *f) // TODO: Change to state machine, refactor the shit out of this
 {
   static Stages prev_stage = INS_1;
   static double prev_flow = 0;
-  static double init_angle = 0;
+  static int32_t init_angle = 0;
   static uint32_t prev_millis = millis();
   static int16_t open_pressure_adc[16];
   static int16_t exp_press[16];
@@ -107,6 +107,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
   static uint16_t top_pres_index = 0;
   static double max_inspiration_flow = 0;
   static double max_expiration_flow = 0;
+  static int32_t end_angle = 0;
 
   if(prev_stage != INS_1 && s->cur_stage == INS_1)
   {
@@ -118,7 +119,10 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
     Serial.print(c->t_f*3);
     Serial.println(",");
     #else
-    Serial.print(f->angle, 5);
+    // Serial.print(f->angle, 5);
+    Serial.print(init_angle);
+    Serial.print(" ");
+    Serial.print(end_angle);
     Serial.print(" ");
     Serial.print(f->flow_exp_max*60, 5);
     Serial.print(" ");
@@ -134,7 +138,8 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
   f->volume += (f->flow*(millis() - prev_millis)/1000);
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
-    f->angle = CLICKS_TO_RAD*RAD_TO_DEG*((e->getPosition()) - init_angle);
+    f->angle = CLICKS_TO_RAD*RAD_TO_DEG*((odrive_read_encoder(&Serial2, o, ARM_AXIS)) - init_angle);
+    end_angle = odrive_read_encoder(&Serial2, o, ARM_AXIS);
     f->pip = arr_top(top_pres, 64);
     memset(top_pres, 0, sizeof(top_pres));
     f->vti = f->volume;
@@ -145,7 +150,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, RotaryEncoder *e, CurvePar
   {
     max_inspiration_flow = 0;
     f->peep = arr_average(exp_press, 16);
-    init_angle = (e->getPosition());
+    init_angle = (odrive_read_encoder(&Serial2, o, ARM_AXIS));
   }
 
   else if(s->cur_stage >= INS_1 && s->cur_stage <= INS_3) 

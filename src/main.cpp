@@ -198,7 +198,7 @@ void loop()
 
   if(sys_state.plot_enable && millis()>next_plot_update)
   {
-    plot_data(&step, &curve_vals, &motor_vals, &current_flow);
+    plot_data(&step, &curve_vals, &motor_vals, &current_flow, &sys_state);
     next_plot_update = millis() + PLOT_UPDATE_DELAY;
   }
 
@@ -484,7 +484,7 @@ void calibrate()
 
   switch (state)
   {
-  case 0:
+  case 0: //TODO: Handle init on limit switch activation
   {
     sys_state.play_state = CAL;
     sys_state.zeroed = false;
@@ -548,6 +548,7 @@ void calibrate()
   {
     sys_state.cal_flag=true;
     state = 0;
+    sys_state.zero_pos = odrive_read_encoder(&Serial2, &odrive, 0);
     Serial.println("[LOG]Arm successfully calibrated.");
     Serial.println(odrive_read_encoder(&Serial2, &odrive, ARM_AXIS));
     break;

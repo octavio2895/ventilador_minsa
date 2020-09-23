@@ -76,7 +76,7 @@ void print_curve_data(CurveParams *c)
   #endif
 }
 
-void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
+void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f, SysState *sys)
 {
   #ifdef USE_FLUTTER_PRINTS
   static int16_t buffer_index = 0;
@@ -141,7 +141,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f)
   Serial.print(" ");
   Serial.print((double)s->cur_stage/10, 4);
   Serial.print(" ");
-  Serial.print(m->current_ang_pos, 4);
+  Serial.print(m->current_ang_pos-(CLICKS_TO_RAD*(double)(sys->zero_pos)), 4);
   Serial.print(" ");
   Serial.print(m->target_pos, 4);
   Serial.print(" ");

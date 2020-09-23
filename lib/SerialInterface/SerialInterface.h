@@ -16,7 +16,7 @@
 
 
 void print_curve_data(CurveParams *);
-void plot_data(StepInfo *, CurveParams *, MotorDynamics *, FlowData *);
+void plot_data(StepInfo *, CurveParams *, MotorDynamics *, FlowData *, SysState *);
 void parse_params(char*, unsigned long, SysState*, ControlVals*, CurveParams*, CurveParams*);
 
 #endif

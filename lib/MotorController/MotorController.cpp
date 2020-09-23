@@ -91,7 +91,18 @@ void odrive_speed_write(MotorDynamics *m, double vel)
   #ifdef INVERTED_SPEED
   snprintf(serial_buf, sizeof(serial_buf),"v %d %ld", m->axis,(int32_t)-vel);
   #else
-  snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int16_t)vel);
+  snprintf(serial_buf, sizeof(serial_buf),"v %d %d", m->axis,(int32_t)vel);
+  #endif
+  m->serial_out->println(serial_buf);
+}
+
+void odrive_pos_write(MotorDynamics *m, double pos)
+{
+  char serial_buf[100];
+  #ifdef INVERTED_SPEED
+  snprintf(serial_buf, sizeof(serial_buf),"p %d %ld", m->axis,(int32_t)-pos);
+  #else
+  snprintf(serial_buf, sizeof(serial_buf),"p %d %d", m->axis,(int32_t)-pos);
   #endif
   m->serial_out->println(serial_buf);
 }
@@ -130,7 +141,7 @@ void execute_motor(SysState *sys, MotorDynamics *m)
   }
   else
   {
-    odrive_speed_write(m, m->output);
+    odrive_pos_write(m, m->output+(sys->zero_pos));
   }
 }
 
@@ -149,7 +160,8 @@ void mimo_control(MotorDynamics *m, ControlVals *c, StepInfo *s)
 
   // m->motor_volts = kp * error_position;
   // m->output = fmap(m->motor_volts, 0, 12, MAX_PWM, -MAX_PWM);
-  m->output = kp * error_position;
+  // m->output = kp * error_position;
+  m->output = m->target_pos*RAD_TO_CLICK;
   // Serial.println(m->output);
 
 }

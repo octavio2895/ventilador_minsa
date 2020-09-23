@@ -144,6 +144,7 @@ enum PlayStates
 struct SysState
 {
     PlayStates play_state = PAUSE;
+    int32_t zero_pos = 0;
     bool cal_flag = 0;
     bool odrive_cal_flag = 0;
     bool plot_enable = 0;

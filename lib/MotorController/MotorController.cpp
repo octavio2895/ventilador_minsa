@@ -112,7 +112,8 @@ void read_motor(MotorDynamics *m, ODriveArduino *o) //TODO Encapsulate ODrive in
   m->current_pos = odrive_read_encoder(&Serial2, o, ARM_AXIS);
   // Serial.println(m->current_pos);
   m->current_ang_pos = CLICKS_TO_RAD * m->current_pos;
-  m->current_vel = calculate_angular_velocity(m);
+  // m->current_vel = calculate_angular_velocity(m);
+  m->current_vel = read_angular_odrive_velocity(&Serial2, o, ARM_AXIS)*CLICKS_TO_RAD;
 }
 
 void filter_motor(MotorDynamics *m)
@@ -184,4 +185,20 @@ double interpolate_gains(double ang)
 double fmap(double in, double in_min, double in_max, double out_min, double out_max)
 {
   return((in/(in_max-in_min))*(out_max-out_min)+out_min);
+}
+
+int32_t read_angular_odrive_velocity(HardwareSerial* ser, ODriveArduino* odrive, uint8_t axis) //TODO make this asynchronous
+{
+    static uint32_t last_call;
+    static int32_t last_vel;
+    if(last_call + ENCODER_WINDOW < millis())
+    {
+        char serial_buf[50];
+        snprintf(serial_buf, sizeof(serial_buf), "r axis%d.encoder.vel_estimate", axis);
+        ser->println(serial_buf);
+        last_vel = -odrive->readInt();
+        last_call = millis();
+        return last_vel;
+    }
+    else return last_vel;
 }

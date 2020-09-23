@@ -45,5 +45,6 @@ int32_t calculate_position(ODriveArduino *e);
 double interpolate_gains(double);
 void odrive_speed_write(MotorDynamics *m, double vel);
 void odrive_pos_write(MotorDynamics *m, double pos, double vel);
+int32_t read_angular_odrive_velocity(HardwareSerial* ser, ODriveArduino* odrive, uint8_t axis);
 
 #endif

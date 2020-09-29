@@ -133,7 +133,7 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f, SysSt
   // Serial.print(" ");
   Serial.print(s->cur_step);
   Serial.print(" ");
-  Serial.print(f->flow*60, 5);
+  Serial.print((f->flow*60.0), 5);
   Serial.print(" ");
   Serial.print(f->volume, 5);
   Serial.print(" ");

@@ -16,6 +16,8 @@
 #include <SysStructs.h>
 
 // #define USBD_USE_CDC
+// #define USB_MANUFACTURER_STRING "FabLab UTP"
+// #define USB_PRODUCT_STRING "PanaVent"
 // #define SCREEN
 
 // Pin definitions.
@@ -140,28 +142,22 @@ void setup()
   pinMode(PIN_PWM, OUTPUT_OPEN_DRAIN);
   pinMode(PIN_DIR, OUTPUT_OPEN_DRAIN);
   digitalWrite(PIN_PWM, 0);
-  // encoder.begin();
-  // attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_A), encoderISR, CHANGE);
-  // attachInterrupt(digitalPinToInterrupt(PIN_ENCODER_B), encoderISR, CHANGE);
-  // attachInterrupt(digitalPinToInterrupt(PIN_LIMIT_SWITCH), limitswitchISR, CHANGE);
   sys_state.limit_switch_state = !digitalRead(PIN_LIMIT_SWITCH);
   #ifdef SCREEN
   lcd.begin(16, 2, LCD_5x8DOTS);
   lcd.setCursor(0,0);
   #endif
+  delay(5000);
   analogReadResolution(12);
   analogWriteFrequency(20000);
   Serial.begin(115200);
   Serial.println("Booting up...");
   Serial2.begin(115200);
-  ads.setGain(GAIN_SIXTEEN);
-  ads.begin();
-  ads.setSPS(ADS1115_DR_860SPS); 
-  // calibrate_pressure_sensor(&pres_0); // TODO: Review this
-  calibrate_pressure_sensor(&pres_1);
+  sensirion_begin();
+  calibrate_pressure_sensor(&pres_0); // TODO: Review this
+  // calibrate_pressure_sensor(&pres_1);
   pres_0.openpressure = 253;
   Serial.println("Done!");
-  // pres_1.openpressure = 13;
 }
 
 void loop() 
@@ -183,8 +179,7 @@ void loop()
   if (sensor_update_enable && millis() > next_sensor_update)
   {
     read_pressure(&pres_0, &current_flow);
-    read_pressure_2(&pres_1, &current_flow);
-    calculate_flow_oplate(&current_flow);
+    calculate_flow_sensirion(&current_flow);
     calculate_flow_state(&step, &sys_state, &odrive, &curve_vals, &current_flow);
     //flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;

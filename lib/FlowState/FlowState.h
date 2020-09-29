@@ -40,5 +40,8 @@ void calculate_flow_state(StepInfo *, SysState *, ODriveArduino *, CurveParams *
 void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *c, CurveParams *n, FlowData *f);
 double deg_to_vol(double);
 double vol_to_deg(double);
+uint8_t calcCRC(byte *buff, int num) ;
+void calculate_flow_sensirion(FlowData *f);
+void sensirion_begin();
 
 #endif

@@ -16,6 +16,61 @@ void calculate_flow_oplate(FlowData *f)
   else  f->flow = (-sqrt(abs(f->differential_pressure)/y_1));
 }
 
+void calculate_flow_sensirion(FlowData *f) //TODO: Check for CRC error
+{
+  sensirion_begin();
+  byte c[3] = {0 ,0 ,0};
+  int i = 0;
+  uint16_t data = 0;
+  Wire.requestFrom(64, 3);
+  uint32_t timeout = millis() + 100;
+  while(!Wire.available())
+  {
+    delay(1); //TODO: Blocking!
+    if(millis()>timeout)break;
+  }
+  while (Wire.available()) 
+  {
+    c[i++] = Wire.read(); //TODO: Blocking!
+  }
+  data = (c[0] << 8) | c[1];
+  Serial.println(data, BIN);
+  uint8_t crc = calcCRC(c, 2);
+  if(crc != c[2])
+  {
+    // Serial.println("[LOG] Sensor CRC check failed!");
+    return;
+  }
+
+  f->flow = ((double)data-32768)/(120*60);
+  // Serial.println(f->flow);
+}
+
+uint8_t calcCRC(byte buff[], int num) 
+{
+    uint8_t crc = 0;
+    for (uint8_t idx = 0; idx < num; idx++) {
+        crc ^= buff[idx];
+        for (uint8_t loop = 8; loop > 0; --loop) {
+            if (crc & 0x80) {
+                crc = (crc << 1) ^ CRC_POLYNOMIAL;
+            } else {
+                crc = (crc << 1);
+            }
+        }
+    }
+    return(crc);
+}
+
+void sensirion_begin()
+{
+  byte cmd[2] = {0x10, 0x00};
+  Wire.begin();
+  Wire.beginTransmission(64);
+  Wire.write(cmd, 2);
+  Wire.endTransmission();
+  delay(10);
+}
 
 void read_pressure(PressureSensor *p, FlowData *f)
 {
@@ -24,8 +79,9 @@ void read_pressure(PressureSensor *p, FlowData *f)
   if(i>7)i = 0;
   adc[i] = analogRead(A0);
   p->pressure_adc = arr_average(adc, 8);
-  p->pressure = ((p->pressure_adc - p->openpressure) * MULTIPLIER * 2.222);
-  f->differential_pressure = p->pressure;
+  p->pressure = ((p->pressure_adc - p->openpressure) * MULTIPLIER * 22.6757);
+  f->pressure = p->pressure;
+  // Serial.println(f->pressure);
   i++;
 }
 
@@ -39,6 +95,7 @@ void read_pressure_2(PressureSensor *p, FlowData *f)
   if(p->pressure_adc <= (double)(p->openpressure+1)) p->pressure_adc = (double)p->openpressure; // TODO: Check this deadzone.
   p->pressure = ((p->pressure_adc - (double)p->openpressure) * MULTIPLIER_2 * 1.25* 10.1972*4.40); // cmH2O
   f->pressure = p->pressure;
+  // Serial.println(f->pressure);
   i++;
 }
 

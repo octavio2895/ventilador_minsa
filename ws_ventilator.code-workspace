@@ -3,6 +3,10 @@
 		{
 			"name": "ventilador_minsa",
 			"path": "."
+		},
+		{
+			"name": "sensirion_sensor",
+			"path": "../PlatformIO/Projects/sensirion_sensor"
 		}
 	],
 	"settings": {

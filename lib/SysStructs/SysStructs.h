@@ -9,6 +9,7 @@
 
 #include <ODriveArduino.h>
 
+#define CRC_POLYNOMIAL        (0x0131)
 #define K1                    120//85
 #define K2                    0.5 //4
 #define K3                    300

@@ -280,6 +280,7 @@ void calculate_flow_state(StepInfo *s, SysState *sys, ODriveArduino *o, CurvePar
 
 void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *c, CurveParams *n, FlowData *f)
 {
+  char serial_buff[50];
   static int16_t prev_stage = 0;
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
@@ -287,8 +288,8 @@ void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *
     {
       double error = f->vti - c->target_vol;
       double new_ang = error > 0? c->a_t - 2.5 : c->a_t + 2.5;
-      Serial.println(c->a_t);
-      Serial.println(new_ang);
+      snprintf(serial_buff, sizeof(serial_buff), "[LOG]Updating angular displacement from %2.1f to %2.1f", c->a_t, new_ang);
+      Serial.println(serial_buff);
       if(new_ang > MAX_VOL) new_ang = MAX_VOL;
       if(new_ang < MIN_VOL) new_ang = MIN_VOL;
       if(new_ang != c->a_t && params_check(c->rr, c->x, new_ang) == 0)

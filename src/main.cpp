@@ -5,6 +5,7 @@
 #include <math.h>
 #include <Adafruit_ADS1015.h>
 #include <ODriveArduino.h>
+#include <gasboard7500E.h>
 
 #include <FlowState.h>
 #include <Curves.h>
@@ -27,6 +28,7 @@
 #define PIN_DIR               PB0
 #define PIN_CURRENT_SENSE     PB1
 #define PIN_LIMIT_SWITCH      PA8
+#define PIN_THERMISTOR        PA4
 
 // Physical constraints.
 #define ENCODER_CPR           8000
@@ -67,6 +69,7 @@
 #define LIMIT_SWITCH_LOGIC    1
 #define HOMING_SPEED          5000
 #define HOME_DZ               1000
+#define B_VALUE               3260
 
 
 
@@ -94,6 +97,7 @@ StepInfo step;
 MotorDynamics motor_vals;// = {.dir_pin = PIN_DIR, .pwm_pin = PIN_PWM};
 CurveParams curve_vals, new_vals;
 HardwareSerial Serial2(PA3, PA2);
+HardwareSerial Serial3(PB11, PB10);
 ODriveArduino odrive(Serial2);
 
 // Global vars.
@@ -131,6 +135,8 @@ void odrive_cal(uint8_t motor);
 void handle_odrive_error();
 void go_home();
 void move_arm_to(int32_t);
+void read_thermistor(MotorDynamics *m);
+void read_o2(HardwareSerial *ser, FlowData *f);
 
 
 void setup()
@@ -154,6 +160,8 @@ void setup()
   analogWriteFrequency(20000);
   Serial.begin(115200);
   Serial1.begin(9600);
+  o2sens_init();
+  Serial3.begin(9600,SERIAL_8N2);
   Serial.println("Booting up...");
   Serial2.begin(115200);
   sensirion_begin();
@@ -182,6 +190,8 @@ void loop()
 
   if (sensor_update_enable && millis() > next_sensor_update)
   {
+    read_thermistor(&motor_vals);
+    read_o2(&Serial3, &current_flow);
     read_pressure(&pres_0, &current_flow);
     calculate_flow_sensirion(&current_flow, &sys_state);
     calculate_flow_state(&step, &sys_state, &odrive, &curve_vals, &current_flow);
@@ -237,7 +247,7 @@ void loop()
     next_screen_update = millis() + 500;
   }
   #endif
-  if (millis()>next_sensirion_update)
+  if (millis()>next_sensirion_update) //TODO Add timeout
   { 
     if(Serial1.available())
     {
@@ -651,4 +661,31 @@ void print_errors_string(char serial_buf[], uint32_t serial_size, uint32_t odriv
 {
   if (error_size != sizeof(uint32_t)*5) return;
   snprintf(serial_buf, serial_size, "Axis error: %ld\nMotor error: %ld\nController error: %ld\nEncoder error: %ld\nSensorless Estimator error: %ld", odrive_errors[0], odrive_errors[1], odrive_errors[2], odrive_errors[3], odrive_errors[4]);
+}
+
+void read_thermistor(MotorDynamics *m)
+{
+  float temp;
+  uint32_t adc_read = analogRead(A4);
+  float resistance = 10000*(((float)adc_read)/(4096-(float)adc_read));
+  // temp_array[temp_num] = (B_VALUE*(25+273.15) / ((25+273.15)*log(resistance/100000)+B_VALUE)) - 273.15;
+  temp = (B_VALUE) / (log(resistance)+1.73544) - 273.15;
+  m->temp = temp;
+  m->adc_therm = adc_read;
+  m->therm_resistance = resistance;
+}
+
+void read_o2(HardwareSerial *ser, FlowData *f)
+{
+  o2sens_feedUartByte(ser->read()); // give byte to the parser
+  // vals->o2_test = vals->o2_test + 1;
+  if (o2sens_hasNewData()) // a complete packet has been processed
+  {
+    o2sens_clearNewData(); // clear the new packet flag
+    // vals->o2_test = vals->o2_test + 100 -12;
+    f->o2_concentration = o2sens_getConcentration16();
+    f->o2_flow = o2sens_getFlowRate16();
+    f->o2_temp = o2sens_getTemperature16(); 
+  }
+  // vals->o2_test = vals->o2_test + 2;
 }

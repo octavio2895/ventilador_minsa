@@ -81,6 +81,9 @@ struct FlowData
   double error;
   double pressure;
   double differential_pressure;
+  uint16_t o2_concentration;
+  uint16_t o2_flow;
+  uint16_t o2_temp;
 };
 
 struct ControlVals 
@@ -109,6 +112,9 @@ struct MotorDynamics
   int16_t pwm_pin;
   double motor_volts;
   int16_t axis;
+  float temp;
+  uint32_t adc_therm;
+  float therm_resistance;
 };
 
 

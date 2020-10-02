@@ -156,6 +156,14 @@ void plot_data(StepInfo *s, CurveParams *c, MotorDynamics *m, FlowData *f, SysSt
   Serial.print(c->t_f);
   Serial.print(" ");
   Serial.print(m->output);
+  Serial.print(" ");
+  Serial.print(m->temp);
+  Serial.print(" ");
+  Serial.print(f->o2_concentration);
+  Serial.print(" ");
+  Serial.print(f->o2_flow);
+  Serial.print(" ");
+  Serial.print(f->o2_temp);
   Serial.println();
   #endif
 }

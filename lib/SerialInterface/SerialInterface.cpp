@@ -54,7 +54,7 @@ void print_curve_data(CurveParams *c)
     Serial.print(i);
     Serial.print(": ");
     Serial.print(c->v[i], 4);
-    if(i<=6) Serial.print(", PLOT_UPDATE_DELAY");
+    if(i<=6) Serial.print(", ");
   }
   Serial.println();
   Serial.print("Plus C --> ");

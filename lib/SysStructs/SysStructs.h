@@ -55,7 +55,7 @@ struct CurveParams
   uint32_t t[7];
   double plus_c[7];
   double target_vol = .7;
-  double a_t = 42;
+  double a_t = 55;
 
 };
 
@@ -87,7 +87,7 @@ struct ControlVals
 {
   double kp[7] = {K1, K3, K5, K1, K1, K1, K1};
   double kv[7] = {K2, K4, K6, K2, K2, K2, K2};
-  double kvol = 0.3;
+  double kvol = 0.04;
 };
 
 struct MotorDynamics

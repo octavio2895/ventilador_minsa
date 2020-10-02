@@ -57,6 +57,7 @@
 #define SENSOR_UDPATE_DELAY   5
 #define PLOT_UPDATE_DELAY     5
 #define ERROR_UPDATE_DELAY    100
+#define SENSIRION_UPDATE_DELAY 10
 
 // Parameter
 #define MAX_ADC_RESOLUTION    16
@@ -99,7 +100,7 @@ ODriveArduino odrive(Serial2);
 double y_0 = 0.51;
 double y_1 = 0.58;
 bool h_cal_flag = true, enc_inverted = false, dir, is_rising=1, is_falling=0, pres_cal_fail = 0, reset_flag = 0;
-uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle, next_error_update;
+uint32_t next_motor_update = 0, next_speed_update = 0, next_dir_change, next_screen_update, next_params_update, next_serial_update, next_pres_cal, next_sensor_update, next_plot_update, cycle, next_error_update, next_sensirion_update;
 double pos_to_vel, flow, volume, volume_in, volume_out, pip, peep, max_ins_flow, max_exp_flow;
 bool plot_enable = 1, sensor_update_enable = 1, params_update_enable = 1, motor_control_enable = 1, odrive_errors_update_enable = 0;
 double k_vol = 0.3;
@@ -134,6 +135,7 @@ void move_arm_to(int32_t);
 
 void setup()
 {
+  curve_vals.a_t = vol_to_deg(curve_vals.target_vol);
   motor_vals.serial_out = &Serial2;
   motor_vals.odrive = &odrive;
   motor_vals.axis = 0;
@@ -151,12 +153,14 @@ void setup()
   analogReadResolution(12);
   analogWriteFrequency(20000);
   Serial.begin(115200);
+  Serial1.begin(9600);
   Serial.println("Booting up...");
   Serial2.begin(115200);
   sensirion_begin();
   calibrate_pressure_sensor(&pres_0); // TODO: Review this
   // calibrate_pressure_sensor(&pres_1);
   pres_0.openpressure = 253;
+  restart_odrive(&odrive, &Serial2);
   Serial.println("Done!");
 }
 
@@ -168,8 +172,8 @@ void loop()
 
   if (odrive_errors_update_enable && millis() > next_error_update)
   {
-
-    if(read_errors(&Serial2, &odrive, 0, odrive_errors, sizeof(odrive_errors)))
+    read_errors(&Serial2, &odrive, ARM_AXIS, odrive_errors, sizeof(odrive_errors));
+    if(get_errors(&Serial1, odrive_errors, sizeof(odrive_errors)))
     {
       handle_odrive_error();
     }
@@ -179,9 +183,9 @@ void loop()
   if (sensor_update_enable && millis() > next_sensor_update)
   {
     read_pressure(&pres_0, &current_flow);
-    calculate_flow_sensirion(&current_flow);
+    calculate_flow_sensirion(&current_flow, &sys_state);
     calculate_flow_state(&step, &sys_state, &odrive, &curve_vals, &current_flow);
-    //flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
+    flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
   }
 
@@ -233,6 +237,35 @@ void loop()
     next_screen_update = millis() + 500;
   }
   #endif
+  if (millis()>next_sensirion_update)
+  { 
+    if(Serial1.available())
+    {
+      int32_t flow_int;
+      bool new_line = false;
+      char cmd[20];
+      char serial_buf [100];
+      static int i = 0;
+      if(i > (sizeof(serial_buf)/sizeof(char))) i = 0;
+      while (Serial1.available())
+      {
+        serial_buf[i] = Serial1.read();
+        if(serial_buf[i] == 0x01)
+        {
+          new_line = true; //TODO: Protect index
+        }
+        i++;
+      }
+        if(new_line)
+        {
+          sscanf(serial_buf, "%s %d", cmd, &flow_int);
+          memset(serial_buf, 0x00, sizeof(serial_buf)/sizeof(char));
+          current_flow.flow = ((double)flow_int)/600;
+          i = 0;
+        }
+    }
+    else next_sensirion_update = millis() + SENSIRION_UPDATE_DELAY;
+  }
 
   if (millis()>next_serial_update)
   { 
@@ -243,7 +276,7 @@ void loop()
       int i = 0;
       while (Serial.available())
       {
-        serial_buf[i++] = Serial.read();
+        serial_buf[i++] = Serial.read(); //TODO protect index
       }
       parse_params(serial_buf, (sizeof(serial_buf)/sizeof(char)),  &sys_state, &control_vals, &curve_vals, &new_vals);
       next_serial_update = millis() + SERIAL_UPDATE_DELAY;
@@ -408,6 +441,7 @@ void odrive_cal(uint8_t motor) // Runs the full calibration routine for ODrive m
     sys_state.odrive_cal_flag = true;
     odrive_errors_update_enable = true;
     sys_state.play_state = PAUSE; //Ready to start.
+    
     break;
   }
   case 3:
@@ -543,9 +577,8 @@ void calibrate()
   {
     sys_state.cal_flag=true;
     state = 0;
-    sys_state.zero_pos = odrive_read_encoder(&Serial2, &odrive, 0);
+    sys_state.zero_pos = odrive_read_encoder(&Serial2, &odrive, ARM_AXIS);
     Serial.println("[LOG]Arm successfully calibrated.");
-    Serial.println(odrive_read_encoder(&Serial2, &odrive, ARM_AXIS));
     break;
   }
   default:

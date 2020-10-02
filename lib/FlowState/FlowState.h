@@ -24,6 +24,8 @@
 #define MULTIPLIER              5/4096
 #define MULTIPLIER_2            0.0078125
 #define ORIFICE_PLATE_REF_TEMP  22
+#define FLOW_SENSOR_RETRIES     3
+#define PERMISSIBLE_VOLUME_ERROR 10
 
 extern double y_0, y_1;
 
@@ -40,8 +42,10 @@ void calculate_flow_state(StepInfo *, SysState *, ODriveArduino *, CurveParams *
 void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *c, CurveParams *n, FlowData *f);
 double deg_to_vol(double);
 double vol_to_deg(double);
-uint8_t calcCRC(byte *buff, int num) ;
-void calculate_flow_sensirion(FlowData *f);
+uint8_t calcCRC(char *buff, int num) ;
+void calculate_flow_sensirion(FlowData *f, SysState *s);
 void sensirion_begin();
+void sensirion_restart();
+
 
 #endif

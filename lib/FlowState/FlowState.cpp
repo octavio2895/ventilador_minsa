@@ -16,37 +16,62 @@ void calculate_flow_oplate(FlowData *f)
   else  f->flow = (-sqrt(abs(f->differential_pressure)/y_1));
 }
 
-void calculate_flow_sensirion(FlowData *f) //TODO: Check for CRC error
+void calculate_flow_sensirion(FlowData *f, SysState *sys) //TODO: Check for CRC error
 {
-  sensirion_begin();
-  byte c[3] = {0 ,0 ,0};
+  char serial_buf[50];
+  static uint8_t restart_retries = 1;
+  char c[3] = {0 ,0 ,0};
   int i = 0;
   uint16_t data = 0;
+
   Wire.requestFrom(64, 3);
-  uint32_t timeout = millis() + 100;
+  uint32_t timeout = millis() + 10;
   while(!Wire.available())
   {
     delay(1); //TODO: Blocking!
-    if(millis()>timeout)break;
+    if(millis()>timeout)
+    {
+      // Serial.println("[LOG]Flow sensor timed-out");
+      if(restart_retries++ < FLOW_SENSOR_RETRIES)
+      {
+        // snprintf(serial_buf, sizeof(serial_buf), "[LOG]Retry %d/3", restart_retries);
+        // sensirion_begin();
+      }
+      else
+      {
+        // Serial.println("[CRITICAL]Flow sensor have stopped working, entering fail mode");
+        sys->play_state = FAIL;
+      }
+      return;
+    }
+    // break;
+  }
+  if(Wire.available() > 3)
+  {
+    while(Wire.available())
+    {
+      Wire.read();
+    }
   }
   while (Wire.available()) 
   {
     c[i++] = Wire.read(); //TODO: Blocking!
   }
+  restart_retries = 1;
   data = (c[0] << 8) | c[1];
-  Serial.println(data, BIN);
   uint8_t crc = calcCRC(c, 2);
   if(crc != c[2])
   {
-    // Serial.println("[LOG] Sensor CRC check failed!");
+    // Serial.println("[LOG]Flow sensor CRC check failed");
+    // Serial.println(data, BIN);
+    // sensirion_begin();
     return;
   }
 
-  f->flow = ((double)data-32768)/(120*60);
-  // Serial.println(f->flow);
+  f->flow = ((double)(data-32768))/(120*60);
 }
 
-uint8_t calcCRC(byte buff[], int num) 
+uint8_t calcCRC(char buff[], int num) 
 {
     uint8_t crc = 0;
     for (uint8_t idx = 0; idx < num; idx++) {
@@ -64,12 +89,24 @@ uint8_t calcCRC(byte buff[], int num)
 
 void sensirion_begin()
 {
+  sensirion_restart();
   byte cmd[2] = {0x10, 0x00};
   Wire.begin();
   Wire.beginTransmission(64);
   Wire.write(cmd, 2);
   Wire.endTransmission();
-  delay(10);
+  delay(200);
+}
+
+void sensirion_restart()
+{
+  Serial.println("[LOG]Restarting flow sensor...");
+  byte cmd[2] = {0x20, 0x00};
+  Wire.begin();
+  Wire.beginTransmission(64);
+  Wire.write(cmd, 2);
+  Wire.endTransmission();
+  delay(200); //TODO : Blocking!
 }
 
 void read_pressure(PressureSensor *p, FlowData *f)
@@ -177,9 +214,11 @@ void calculate_flow_state(StepInfo *s, SysState *sys, ODriveArduino *o, CurvePar
     Serial.println(",");
     #else
     // Serial.print(f->angle, 5);
-    Serial.print(init_angle);
+    Serial.print(init_angle*CLICKS_TO_RAD*RAD_TO_DEG);
     Serial.print(" ");
-    Serial.print(end_angle);
+    Serial.print(end_angle*CLICKS_TO_RAD*RAD_TO_DEG);
+    Serial.print(" ");
+    Serial.print((end_angle-init_angle)*CLICKS_TO_RAD*RAD_TO_DEG);
     Serial.print(" ");
     Serial.print(f->flow_exp_max*60, 5);
     Serial.print(" ");
@@ -244,11 +283,14 @@ void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *
   static int16_t prev_stage = 0;
   if(prev_stage <= INS_3 && s->cur_stage >= REST_1)
   {
-    if(f->vti > c->target_vol*(1.1) || f->vti < c->target_vol*(.9))
+    if(f->vti > c->target_vol+0.05 || f->vti < c->target_vol-0.05)
     {
       double error = f->vti - c->target_vol;
-      double new_ang = error > 0? c->a_t - abs(vol_to_deg(error*con->kvol)) : c->a_t + abs(vol_to_deg(error*con->kvol));
+      double new_ang = error > 0? c->a_t - 2.5 : c->a_t + 2.5;
+      Serial.println(c->a_t);
+      Serial.println(new_ang);
       if(new_ang > MAX_VOL) new_ang = MAX_VOL;
+      if(new_ang < MIN_VOL) new_ang = MIN_VOL;
       if(new_ang != c->a_t && params_check(c->rr, c->x, new_ang) == 0)
       {
         get_accels(n, c->rr, c->x, new_ang);
@@ -265,10 +307,10 @@ void flow_controller(StepInfo *s, SysState *sys, ControlVals *con, CurveParams *
 
 double deg_to_vol(double deg)
 {
-  return((22.1944588*deg-218.41009)/1000);
+  return((0.0271*deg-0.78957));
 }
 
 double vol_to_deg(double vol)
 {
-  return(44.8549*vol+9.93772);
+  return(36.71355*vol+29.221);
 }

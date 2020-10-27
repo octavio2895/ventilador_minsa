@@ -59,7 +59,9 @@
 #define SENSOR_UDPATE_DELAY   5
 #define PLOT_UPDATE_DELAY     5
 #define ERROR_UPDATE_DELAY    100
-#define SENSIRION_UPDATE_DELAY 10
+#define SENSIRION_UPDATE_DELAY 0
+#define MAX_FLOW              100
+
 
 // Parameter
 #define MAX_ADC_RESOLUTION    16
@@ -69,7 +71,7 @@
 #define LIMIT_SWITCH_LOGIC    1
 #define HOMING_SPEED          5000
 #define HOME_DZ               1000
-#define B_VALUE               3260
+#define B_VALUE               3350
 
 
 
@@ -164,7 +166,7 @@ void setup()
   Serial3.begin(9600,SERIAL_8N2);
   Serial.println("Booting up...");
   Serial2.begin(115200);
-  sensirion_begin();
+  // sensirion_begin();
   calibrate_pressure_sensor(&pres_0); // TODO: Review this
   // calibrate_pressure_sensor(&pres_1);
   pres_0.openpressure = 253;
@@ -193,7 +195,7 @@ void loop()
     read_thermistor(&motor_vals);
     read_o2(&Serial3, &current_flow);
     read_pressure(&pres_0, &current_flow);
-    calculate_flow_sensirion(&current_flow, &sys_state);
+    // calculate_flow_sensirion(&current_flow, &sys_state);
     calculate_flow_state(&step, &sys_state, &odrive, &curve_vals, &current_flow);
     flow_controller(&step, &sys_state, &control_vals, &curve_vals, &new_vals, &current_flow);
     next_sensor_update = millis() + SENSOR_UDPATE_DELAY;
@@ -270,7 +272,11 @@ void loop()
         {
           sscanf(serial_buf, "%s %d", cmd, &flow_int);
           memset(serial_buf, 0x00, sizeof(serial_buf)/sizeof(char));
-          current_flow.flow = ((double)flow_int)/600;
+          if (flow_int < 5000 && flow_int > -5000)
+          {
+            current_flow.flow = ((double)flow_int)/600;
+            // Serial.println(flow_int);
+          }
           i = 0;
         }
     }
